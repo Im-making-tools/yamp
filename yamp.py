@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import re
+import sys
 import time
 import urllib
 from collections import OrderedDict
@@ -10,13 +11,16 @@ import tomllib
 import os
 from datetime import datetime
 from pathlib import Path
-import shutil
 import logging
 import subprocess
 import lzma
 from urllib.parse import urlparse
 
-from picomc.version import Version, VersionManager
+picomc_source = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'picomc', 'src')
+if os.path.exists(picomc_source):  # For debugging
+    sys.path.insert(0, picomc_source)
+
+from picomc.version import VersionManager
 from picomc.launcher import Launcher
 from picomc.account import AccountManager, OfflineAccount
 from picomc.instance import InstanceManager, Instance
@@ -24,24 +28,28 @@ from picomc.downloader import DownloadQueue as OriginalDownloadQueue
 from picomc.mod import forge, fabric
 from picomc.utils import Directory
 from rich.logging import RichHandler
-from rich import get_console, progress
+from rich.console import Console
 from rich.table import Table
 from rich.text import Text
+import rich.progress as progress
 
 import xxhash
 import requests
 import aiohttp
 import aiofiles
 
+console = Console(highlighter=None)
+
 logging.basicConfig(
     level="INFO",
     format="%(message)s",
     datefmt="[%X]",
-    handlers=[RichHandler(rich_tracebacks=True, tracebacks_show_locals=False, show_time=False, show_path=False, markup=True)],
+    handlers=[RichHandler(console=console, rich_tracebacks=True, tracebacks_show_locals=False, show_time=False, show_path=False, markup=True)],
 )
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 JAVA = shutil.which("java")
 
+url_to_name = {}
 class DownloadQueue:
     chunk_size = 1024 * 64
     def __init__(self):
@@ -54,6 +62,7 @@ class DownloadQueue:
                 progress.DownloadColumn(binary_units=True),
                 progress.TransferSpeedColumn(),
                 progress.TimeRemainingColumn(),
+                console=console,
         )
 
     def add(self, url, filename, size=None):
@@ -75,7 +84,9 @@ class DownloadQueue:
                     async for data in resp.content.iter_chunked(self.chunk_size):
                         await f.write(data)
                         self.prog.update(task, advance=len(data))
-            MainLauncher.log.info(f"Downloaded [yellow]{Path(filename).name}")
+            if url in url_to_name:
+                rid, filename = url_to_name[url]
+                MainLauncher.log.info(f"Downloaded [yellow]{rid} [gray50]{filename}")
 
     async def async_download(self):
         async with aiohttp.ClientSession() as session:
@@ -107,75 +118,6 @@ def download_override(self):
 
 OriginalDownloadQueue.download = download_override
 
-# def install_java():
-#     if Path(JAVA).exists():
-#         return
-#     dq = DownloadQueue()
-#     if os.name == 'nt':
-#         download_file = Path(tempfile.gettempdir()) / 'jdk-17.0.12_windows-x64_bin.exe'
-#         download_url = "https://download.oracle.com/java/17/archive/jdk-17.0.12_windows-x64_bin.exe"
-#         req = requests.head(download_url)
-#         download_size = int(req.headers['Content-Length'])
-#         dq.add(
-#             download_url,
-#             download_file,
-#             download_size
-#         )
-#     else:
-#         raise NotImplementedError(f"OS {os.name} not supported for java installation. Do it manually!")
-#     logging.getLogger('java_downloader').info("Downloading [blue]java[/blue]..")
-#     dq.download()
-#     logging.getLogger('java_downloader').info("Installing [blue]java[/blue]..")
-#     if os.name == 'nt':
-#         subprocess.run([download_file, '/s', f'INSTALLDIR={MINECRAFT_DIR / "java"}'])
-#     os.remove(download_file)
-
-console = get_console()
-url_to_name = {}
-
-
-def download_override(self):
-    logger = logging.getLogger("downloader")
-
-    with progress.Progress(
-            progress.TaskProgressColumn(),
-            progress.BarColumn(),
-            progress.DownloadColumn(binary_units=True),
-            progress.TransferSpeedColumn(),
-            progress.TimeRemainingColumn(),
-        ) as tq, concurrent.futures.ThreadPoolExecutor(max_workers=self.workers) as tpe:
-        task = tq.add_task(description="Downloading", total=self.total_size if self.known_size else self.total)
-        for i, (url, dest) in enumerate(self.queue, start=1):
-            cb = lambda x: tq.update(task, advance=x if self.known_size else 1)
-            fut = tpe.submit(self.download_file, i, url, dest, cb)
-            self.fut_to_url[fut] = url
-        try:
-            for fut in concurrent.futures.as_completed(self.fut_to_url.keys()):
-                try:
-                    fut.result()
-                    url = self.fut_to_url[fut]
-                    if url in url_to_name:
-                        rid, name = url_to_name[url]
-                        logger.info(f"Downloaded [gray30]{rid} [bold yellow]{name}")
-                except Exception as ex:
-                    msg = f"Exception while downloading {self.fut_to_url[fut]}: {ex}"
-                    self.errors.append(msg)
-                else:
-                    if not self.known_size:
-                        tq.update(task, advance=1)
-        except KeyboardInterrupt as ex:
-            tq.stop()
-            logger.warning("Stopping downloader threads.")
-            self.stop_event.set()
-            tpe.shutdown()
-            for fut in self.fut_to_url:
-                fut.cancel()
-
-    # Do this at the end in order to not break the progress bar.
-    for error in self.errors:
-        logger.error(error)
-    return not self.errors
-
 def get_manifest_override(self):
     from picomc.logging import logger
 
@@ -198,8 +140,6 @@ def get_manifest_override(self):
             logger.warning("Cached version manifest not available.")
             raise RuntimeError("Failed to retrieve version manifest.")
 
-
-# downloader.download = download_override
 VersionManager.get_manifest = get_manifest_override
 
 def load_json_xz(filepath: Path, default_factor=dict):
@@ -233,6 +173,10 @@ class MainLauncher:
     def add_resources(self, cfg, typ):
         for modid, options in cfg.items():
             if modid.isdigit():
+                source = 'curseforge'
+            # method below not recommended, seems like its not always reliable
+            elif modid.startswith('curse-') or modid.startswith('curseforge-'):
+                modid = modid.split('-', 1)[1]
                 source = 'curseforge'
             elif 'url' in options:
                 source = 'url'
@@ -280,7 +224,7 @@ class MainLauncher:
         self.launcher = Launcher(self.es, root=self.MINECRAFT_DIR / "picomc")
         self.am = AccountManager(self.launcher)
         self.config = config
-        self.inst = self.get_instance(java or JAVA)
+        self.inst = self.get_instance(java)
         self.cached = {}
         self.db = {'_loaded': False}
         self.old_files = set()
@@ -382,14 +326,17 @@ class MainLauncher:
         if 'download' in data['response']:
             file = data['response']['download']
         else:
-            file = sorted(filter(lambda x: self.MC_VERSION in x['versions'] and params['loader'].capitalize() in x['versions'], data['response']['files']), key=lambda x: -x['id'])[0]
+            files = sorted(filter(lambda x: self.MC_VERSION in x['versions'] and params['loader'].capitalize() in x['versions'], data['response']['files']), key=lambda x: -x['id'])
+            if len(files) == 0:
+                raise ValueError(f"No versions available for {data['response']['title']} {modid} ({data['response']['url']['curseforge']})")
+            file = files[0]
         sid = str(file['id'])
         data['latest_file'] = {
             'filename': file['name'],
             'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3]}/{sid[-3:]}/{file['name']}',
             'size': file['filesize'],
         }
-        res = self.session.head(data['latest_file']['url'])
+        # res = self.session.head(data['latest_file']['url'])
         data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
         data['name'] = f"{data['response']['title']} ({file['display']})"
         data['rid'] = f"curseforge-{data['response']['id']}"
@@ -569,11 +516,12 @@ class MainLauncher:
         for k, v in self.cached.items():
             self.cached[k]['used'] = False  # Track which projects are used this time
         with progress.Progress(
-                progress.TextColumn("[progress.description]{task.description}"),
-                progress.BarColumn(),
-                progress.MofNCompleteColumn(),
-                progress.TimeRemainingColumn(),
-                progress.TextColumn("[gray50]{task.fields[id]}"),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.MofNCompleteColumn(),
+            progress.TimeRemainingColumn(),
+            progress.TextColumn("[gray50]{task.fields[id]}"),
+            console=console,
         ) as prog:
             self.cached, downloads, error = self.fetch_resources(self.RESOURCES, {}, prog, check_update=update)
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
@@ -615,11 +563,12 @@ class MainLauncher:
         dependents = {}
 
         with progress.Progress(
-                progress.TextColumn("[progress.description]{task.description}"),
-                progress.BarColumn(),
-                progress.MofNCompleteColumn(),
-                progress.TimeRemainingColumn(),
-                progress.TextColumn("[gray50]{task.fields[id]}"),
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.BarColumn(),
+            progress.MofNCompleteColumn(),
+            progress.TimeRemainingColumn(),
+            progress.TextColumn("[gray50]{task.fields[id]}"),
+            console=console
         ) as prog:
             items = [(mod, d) for mod in existing.values() for d in mod['dependencies'].values()]
             task = prog.add_task('Fetching project info', total=len(items), id='')
