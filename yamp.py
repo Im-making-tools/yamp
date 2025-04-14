@@ -185,8 +185,9 @@ class MainLauncher:
             self.RESOURCES[f'{source}-{modid}'] = (modid, source, typ, options)
 
 
-    def __init__(self, config_file: str, root_dir: str|None = None, java: str|None = None):
+    def __init__(self, config_file: str, root_dir: str|None = None, java: str|None = None, debug=False):
         self.session = requests.Session()
+        self.debug = debug
         if not root_dir:
             if os.name == 'nt':
                 root_dir = os.environ.get("YAMP_ROOT", "C:/Games/Minecraft")
@@ -478,7 +479,7 @@ class MainLauncher:
                 data['requested_by'].add(requested_by)
                 data['options'].update(opt)
             data['used'] = True
-            data['disallow'] = opt.get('disallow', False)
+            data['disallow'] = opt.get('disallow', False) or opt.get('debug', False) and not self.debug
             filename: Path = self.inst.directory / 'minecraft' / data['type'] / data['latest_file']['filename']
             cache[data['rid']] = data
             self.mapping[rid] = data['rid']
@@ -545,6 +546,7 @@ class MainLauncher:
                     os.symlink(url[7:], fname)
                 else:
                     os.symlink(self.DOWNLOADS / hash / fname.name, fname)
+                self.log.info(f"Adding mod file [yellow]{fname.name}")
         for mod in self.cached.values():
             if not mod['used'] or mod['type'] != 'mods' or mod['disallow']:
                 continue
@@ -777,6 +779,7 @@ if __name__ == "__main__":
         prog='YAMP', description='Yet Another Minecraft Packmaker. Download and run Minecraft modpacks')
     parser.add_argument('-u', '--update', action='store_true', help='Check for updates and download latest')
     parser.add_argument('-a', '--account', default=None, help='Minecraft username to use')
+    parser.add_argument('-D', '--debug', action='store_true', help='Enable debug environment')
     parser.add_argument('--java', default=None, help='Specify java path')
     parser.add_argument('pack_file', help='Modpack toml filename or url')
     parser.add_argument('action', choices=['client', 'check', 'server', 'loader_vers', 'dryrun'], help='Specify action to do')
@@ -786,7 +789,7 @@ if __name__ == "__main__":
     import picomc.downloader
     import mock
     with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue):
-        ml = MainLauncher(args.pack_file, java=args.java)
+        ml = MainLauncher(args.pack_file, java=args.java, debug=args.debug)
         ml.log.setLevel(logging.INFO)
         if args.action == 'loader_vers':
             ml.list_loader_versions()
