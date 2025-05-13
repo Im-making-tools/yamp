@@ -80,6 +80,7 @@ class DownloadQueue:
             async with session.get(url) as resp:
                 if resp.status != 200:
                     raise ValueError(f"Download failed, server returned code={resp.status} url={url}")
+                filename.parent.mkdir(parents=True, exist_ok=True)
                 async with aiofiles.open(filename, mode='wb') as f:
                     async for data in resp.content.iter_chunked(self.chunk_size):
                         await f.write(data)
