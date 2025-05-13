@@ -353,7 +353,9 @@ class MainLauncher:
         else:
             files = sorted(filter(lambda x: self.MC_VERSION in x['versions'] and params['loader'].capitalize() in x['versions'], data['response']['files']), key=lambda x: -x['id'])
             if len(files) == 0:
-                raise ValueError(f"No versions available for {data['response']['title']} {modid} ({data['response']['url']['curseforge']})")
+                versions = set(v for f in data['response']['files'] for v in f['versions'])
+                raise ValueError(f"No versions available for {find(data, 'response.title', '<no title>')} "
+                                 f"{modid} ({find(data, 'response.url.curseforge', '<no url>')}, files: {len(data['response']['files'])} versions: {versions}")
             file = files[0]
         sid = str(file['id'])
         data['latest_file'] = {
