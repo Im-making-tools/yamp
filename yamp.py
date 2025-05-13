@@ -272,7 +272,7 @@ class MainLauncher:
                     self.launcher.get_path(Directory.VERSIONS),
                     self.launcher.get_path(Directory.LIBRARIES),
                     self.MC_VERSION,
-                    version_name=self.LOADER_VER,
+                    version_name=self.VERSION,
                 )
             else:
                 raise ValueError(f"Unsupported loader: {self.LOADER}, should be either forge or fabric")
