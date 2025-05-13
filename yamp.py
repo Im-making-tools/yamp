@@ -209,7 +209,7 @@ class MainLauncher:
             self.RESOURCES[f'{source}-{modid}'] = (modid, source, typ, options)
 
 
-    def __init__(self, config_file: str, root_dir: str|None = None, java: str|None = None, debug=False):
+    def __init__(self, config_file: str, root_dir: str|None = None, java: str|None = JAVA, debug=False):
         self.session = requests.Session()
         self.debug = debug
         if not root_dir:
