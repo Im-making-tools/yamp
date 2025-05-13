@@ -119,6 +119,19 @@ def download_override(self):
 
 OriginalDownloadQueue.download = download_override
 
+
+def update_symlink(src_file: Path, dest_file: Path):
+    if dest_file.exists():
+        if not dest_file.is_symlink():
+            MainLauncher.log.warning(f"File is not symlink? [yellow]{dest_file.name}")
+            return False
+        if dest_file.readlink() == src_file:
+            return False
+        dest_file.unlink()
+    dest_file.parent.mkdir(parents=True, exist_ok=True)
+    os.symlink(src_file, dest_file)
+    return True
+
 def get_manifest_override(self):
     from picomc.logging import logger
 
@@ -167,6 +180,15 @@ def save_json_xz(filepath: Path, data: dict):
     with lzma.open(filepath, 'wt') as f:
         f.write(data)
 
+def find(root: dict, key: str, default=None):
+    keys = key.split('.')
+    d = root
+    for k in keys:
+        if isinstance(d, dict):
+            d = d.get(k, None)
+    if d is None:
+        return default
+    return d
 
 class MainLauncher:
     log = logging.getLogger('launcher')
@@ -481,12 +503,13 @@ class MainLauncher:
                 data['options'].update(opt)
             data['used'] = True
             data['disallow'] = opt.get('disallow', False) or opt.get('debug', False) and not self.debug
-            filename: Path = self.inst.directory / 'minecraft' / data['type'] / data['latest_file']['filename']
+            filename_output: Path = self.inst.directory / 'minecraft' / data['type'] / data['latest_file']['filename']
+            filename: Path = self.DOWNLOADS / data['latest_file']['hash'] / data['latest_file']['filename']
             cache[data['rid']] = data
             self.mapping[rid] = data['rid']
-            if not filename.exists() and not data['disallow']:
+            if not data['disallow']:
                 url_to_name[data['latest_file']['url']] = data['rid'], data['latest_file']['filename']
-                downloads.append((data['latest_file']['url'], filename, data['latest_file']['size'], data['latest_file']['hash']))
+                downloads.append((data['latest_file']['url'], filename_output, data['latest_file']['size'], data['latest_file']['hash']))
             if not data['disallow']:
                 added.add(data['rid'])
             prog.update(task, advance=1)
@@ -529,30 +552,31 @@ class MainLauncher:
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
         if error:
             raise Exception("Stopping because of previous errors")
-        if len(downloads) > 0:
-            dq = DownloadQueue()
-
-            # Removes duplicates
-            downloads = {hash: (url, fname, size) for url, fname, size, hash in downloads}
-            for hash, (url, fname, size) in downloads.items():
-                if (self.DOWNLOADS / hash / fname.name).exists() or url.startswith('file://'):
-                    continue
-                (self.DOWNLOADS / hash).mkdir(exist_ok=True)
-                dq.add(url, self.DOWNLOADS / hash / fname.name, size)
+        dq = DownloadQueue()
+        # Removes duplicates
+        downloads = {hash: (url, fname, size) for url, fname, size, hash in downloads}
+        for hash, (url, fname, size) in downloads.items():
+            if (self.DOWNLOADS / hash / fname.name).exists() or url.startswith('file://'):
+                continue
+            (self.DOWNLOADS / hash).mkdir(exist_ok=True)
+            dq.add(url, self.DOWNLOADS / hash / fname.name, size)
+        if len(dq) > 0:
             self.log.info("Downloading [blue]mods[/blue]..")
             dq.download()
-            for hash, (url, fname, size) in downloads.items():
-                fname.parent.mkdir(parents=True, exist_ok=True)
-                if url.startswith('file://'):
-                    os.symlink(url[7:], fname)
-                else:
-                    os.symlink(self.DOWNLOADS / hash / fname.name, fname)
-                self.log.info(f"Adding mod file [yellow]{fname.name}")
-        for mod in self.cached.values():
-            if not mod['used'] or mod['type'] != 'mods' or mod['disallow']:
-                continue
-            if mod['latest_file']['filename'] in self.old_files:
-                self.old_files.remove(mod['latest_file']['filename'])
+        for hash, (url, fname, size) in downloads.items():
+            fname.parent.mkdir(parents=True, exist_ok=True)
+            src_file = self.DOWNLOADS / hash / fname.name
+            if url.startswith('file://'):
+                src_file = Path(url[7:])
+            if update_symlink(src_file, fname):
+                self.log.info(f"Updated mod file [yellow]{fname.name}")
+            if fname.name in self.old_files:
+                self.old_files.remove(fname.name)
+        # for mod in self.cached.values():
+        #     if not mod['used'] or mod['type'] != 'mods' or mod['disallow']:
+        #         continue
+        #     if mod['latest_file']['filename'] in self.old_files:
+        #         self.old_files.remove(mod['latest_file']['filename'])
         self.update_custom_files()
 
     def remove_old_mods(self):
@@ -727,15 +751,7 @@ class MainLauncher:
             self.log.info(f"Adding mod: [bright_blue]{trunc_title:30}\t[yellow]{fname}[/yellow]")
             if url.startswith('file://'):
                 src_file = Path(url[7:])
-            if dest_file.exists():
-                if dest_file.readlink() == src_file:
-                    if fname in old_files:
-                        old_files.remove(fname)
-                    continue
-                self.log.warning(f"Removing old symlink file [yellow]{dest_file.name}")
-                dest_file.unlink()
-            dest_file.parent.mkdir(parents=True, exist_ok=True)
-            os.symlink(src_file, dest_file)
+            update_symlink(src_file, dest_file)
             if fname in old_files:
                 old_files.remove(fname)
         self.save_mod_info()
