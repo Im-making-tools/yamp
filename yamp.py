@@ -135,24 +135,27 @@ def update_symlink(src_file: Path, dest_file: Path):
 def get_manifest_override(self):
     from picomc.logging import logger
 
-    manifest_filepath = self.launcher.get_path(Directory.VERSIONS, "manifest.json")
-    try:
-        m = requests.get(self.MANIFEST_URL, timeout=1).json()  # this takes forever!
-        with open(manifest_filepath, "w") as mfile:
-            json.dump(m, mfile, indent=4, sort_keys=True)
-        return m
-    except requests.ConnectionError or requests.exceptions.ReadTimeout:
-        logger.warning(
-            "Failed to retrieve version_manifest. "
-            "Check your internet connection."
-        )
+    manifest_filepath: Path = self.launcher.get_path(Directory.VERSIONS, "manifest.json")
+    if manifest_filepath.exists():
         try:
-            with open(manifest_filepath) as mfile:
-                logger.warning("Using cached version_manifest.")
-                return json.load(mfile)
-        except FileNotFoundError:
-            logger.warning("Cached version manifest not available.")
+            m = requests.get(self.MANIFEST_URL, timeout=1).json()  # Sometimes server takes forever to respond!
+            manifest_filepath.write_text(json.dumps(m, indent=4, sort_keys=True))
+            return m
+        except requests.ConnectionError or requests.exceptions.ReadTimeout:
+            logger.warning("Failed to retrieve version_manifest.")
+            return json.loads(manifest_filepath.read_text())
+    else:
+        try:
+            m = requests.get(self.MANIFEST_URL, timeout=MainLauncher.TIMEOUT).json()
+            manifest_filepath.write_text(json.dumps(m, indent=4, sort_keys=True))
+            return m
+        except requests.ConnectionError or requests.exceptions.ReadTimeout:
+            logger.warning(
+                "Failed to retrieve version_manifest and no local version available."
+                "Check your internet connection."
+            )
             raise RuntimeError("Failed to retrieve version manifest.")
+
 
 VersionManager.get_manifest = get_manifest_override
 
