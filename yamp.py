@@ -191,6 +191,7 @@ def find(root: dict, key: str, default=None):
     return d
 
 class MainLauncher:
+    TIMEOUT = 20
     log = logging.getLogger('launcher')
 
     def add_resources(self, cfg, typ):
@@ -391,7 +392,7 @@ class MainLauncher:
         if mod_id in self.db:
             return self.db[mod_id]
         if mod['source'] == 'modrinth':
-            res = self.session.get(f"https://api.modrinth.com/v2/project/{proj_id}", timeout=5)
+            res = self.session.get(f"https://api.modrinth.com/v2/project/{proj_id}", timeout=self.TIMEOUT)
             res.raise_for_status()
             value.update(**res.json())
         elif mod['source'] == 'curseforge':
@@ -408,11 +409,11 @@ class MainLauncher:
             params['game_versions'] = json.dumps([self.MC_VERSION])
         if typ == "mods":
             params['loaders'] = json.dumps([options.get('loader', self.LOADER)])
-        res = self.session.get(f'https://api.modrinth.com/v2/project/{modid}/version', params=params, timeout=5)
+        res = self.session.get(f'https://api.modrinth.com/v2/project/{modid}/version', params=params, timeout=self.TIMEOUT)
         res.raise_for_status()
         res_data = res.json()
         if len(res_data) == 0:
-            res2 = self.session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=5).json()
+            res2 = self.session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT).json()
             raise ValueError(f"No versions available for {res2['title']} {modid} (https://modrinth.com/mod/{res2['slug']})")
         response = res_data[0]
         if version_id is not None:
