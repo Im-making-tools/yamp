@@ -815,7 +815,7 @@ class MainLauncher:
         self.inst.launch(account)
 
 
-if __name__ == "__main__":
+def main():
     import argparse
 
     parser = argparse.ArgumentParser(
@@ -854,3 +854,7 @@ if __name__ == "__main__":
         ml.save_mod_info()
         if args.action == 'client':
             ml.start_client(args.account, args.singleplayer, args.mutliplayer, args.no_prime)
+
+
+if __name__ == "__main__":
+    main()

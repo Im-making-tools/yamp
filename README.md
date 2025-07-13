@@ -5,6 +5,14 @@ as sources are supported.
 
 ** This is still work in progress **
 
+
+### How to use?
+
+Run with [uv](https://docs.astral.sh/uv/):
+```shell
+uvx https://github.com/Im-making-tools/yamp.git
+```
+
 # Also see
 
 [picomc](https://github.com/sammko/picomc) - minecraft launcher this project is based on

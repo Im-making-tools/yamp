@@ -17,3 +17,6 @@ dependencies = [
 
 [tool.uv.sources]
 picomc = { git = "https://github.com/Im-making-tools/picomc", rev = "features" }
+
+[project.scripts]
+yamp = "yamp:main"
