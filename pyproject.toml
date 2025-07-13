@@ -8,8 +8,12 @@ dependencies = [
     "aiohttp>=3.11.14",
     "mock>=5.2.0",
     "msgpack>=1.1.0",
-    "picomc>=0.5.1",
+    "picomc",
     "requests>=2.32.3",
     "rich>=13.9.4",
+    "uv>=0.7.20",
     "xxhash>=3.5.0",
 ]
+
+[tool.uv.sources]
+picomc = { git = "https://github.com/Im-making-tools/picomc", rev = "features" }

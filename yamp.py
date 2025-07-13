@@ -2,6 +2,7 @@ import asyncio
 import concurrent.futures
 import json
 import re
+import shutil
 import sys
 import time
 import urllib
@@ -141,7 +142,7 @@ def get_manifest_override(self):
             m = requests.get(self.MANIFEST_URL, timeout=1).json()  # Sometimes server takes forever to respond!
             manifest_filepath.write_text(json.dumps(m, indent=4, sort_keys=True))
             return m
-        except requests.ConnectionError or requests.exceptions.ReadTimeout:
+        except (requests.ConnectionError, requests.exceptions.ReadTimeout):
             logger.warning("Failed to retrieve version_manifest.")
             return json.loads(manifest_filepath.read_text())
     else:
@@ -641,6 +642,10 @@ class MainLauncher:
             table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'])
         console.print(table)
 
+    def write_pack_info(self):
+        existing = {m['latest_file']: m for m in self.cached.values()}
+
+
     def update_custom_files(self, root=None):
         for filename, options in self.config.get('custom', {}).items():
             if root is None:
@@ -790,9 +795,24 @@ class MainLauncher:
             return acc
         return self.am.get_default()
 
-    def start_client(self, account_name=None):
+    def start_client(self, account_name=None, singleplayer=None, multiplayer=None, no_prime=False):
         self.log.info(f"Launching modpack [yellow]{self.PACK_NAME}")
-        self.inst.launch(self.get_account(account_name))
+        self.inst.features = {
+            'is_quick_play_singleplayer': singleplayer is not None,
+            'is_quick_play_multiplayer': multiplayer is not None,
+        }
+        self.inst.features_args = {
+            'quickPlaySingleplayer': singleplayer or '',
+            'quickPlayMultiplayer': multiplayer or '',
+        }
+        account = self.get_account(account_name)
+        if os.name == 'posix' and not no_prime:
+            output = subprocess.getoutput(['lspci', '-nn'])
+            if "nvidia" in output.lower():
+                os.environ.setdefault('__NV_PRIME_RENDER_OFFLOAD', '1')
+                os.environ.setdefault('__VK_LAYER_NV_optimus', 'NVIDIA_only')
+                os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
+        self.inst.launch(account)
 
 
 if __name__ == "__main__":
@@ -803,9 +823,12 @@ if __name__ == "__main__":
     parser.add_argument('-u', '--update', action='store_true', help='Check for updates and download latest')
     parser.add_argument('-a', '--account', default=None, help='Minecraft username to use')
     parser.add_argument('-D', '--debug', action='store_true', help='Enable debug environment')
+    parser.add_argument('--no-prime', action='store_true', help='Disable prime rendering (linux with nvidia only, when disabled run on integrated gpu)')
     parser.add_argument('--java', default=None, help='Specify java path')
+    parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
+    parser.add_argument('--mutliplayer', default=None, help='Open mutliplayer server')
     parser.add_argument('pack_file', help='Modpack toml filename or url')
-    parser.add_argument('action', choices=['client', 'check', 'server', 'loader_vers', 'dryrun'], help='Specify action to do')
+    parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'dryrun'], help='Specify action to do')
 
     args = parser.parse_args()
 
@@ -830,4 +853,4 @@ if __name__ == "__main__":
         ml.force_resource_packs()
         ml.save_mod_info()
         if args.action == 'client':
-            ml.start_client(args.account)
+            ml.start_client(args.account, args.singleplayer, args.mutliplayer, args.no_prime)
