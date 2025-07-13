@@ -16,6 +16,7 @@ import logging
 import subprocess
 import lzma
 from urllib.parse import urlparse
+from zipfile import ZipFile, BadZipFile
 
 picomc_source = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'picomc', 'src')
 if os.path.exists(picomc_source):  # For debugging
@@ -642,9 +643,58 @@ class MainLauncher:
             table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'])
         console.print(table)
 
+    def check_zip_files(self):
+        zip_files = list((self.inst.directory / 'minecraft' / 'mods').glob('*.jar'))
+        zip_files += list((self.inst.directory / 'minecraft' / 'resourcepacks').glob('*.zip'))
+        zip_files += list((self.inst.directory / 'minecraft' / 'shaderpacks').glob('*.zip'))
+        zip_files = sorted(zip_files)
+        self.log.info("Checking for corrupt zip files..")
+        with progress.Progress(
+            progress.TextColumn("[progress.description]{task.description}"),
+            progress.DownloadColumn(binary_units=True),
+            progress.TransferSpeedColumn(),
+            progress.TimeRemainingColumn(),
+            progress.TextColumn("[gray50]{task.fields[id]}"),
+            console=console
+        ) as prog:
+            task = prog.add_task('Checking zip files..', total=0, start=False, id='')
+            total = 0
+            chunk_size = 2 ** 20
+            bad: set[Path] = set()
+            for zip in zip_files:
+                try:
+                    zip_file = ZipFile(zip)
+                    for zinfo in zip_file.filelist:
+                        total += zinfo.file_size
+                        prog.update(task, total=total, id=zip.name)
+                except BadZipFile:
+                    bad.add(zip)
+                    self.log.error(f"Corrupt zip file: [yellow]{zip}[/yellow]")
+            prog.start_task(task)
+            prog.update(task, description="Reading zip files..")
+            for zip in zip_files:
+                if zip in bad:
+                    continue
+                zip_file = ZipFile(zip)
+                for zinfo in zip_file.filelist:
+                    prog.update(task, id=zip.name)
+                    try:
+                        with zip_file.open(zinfo.filename, "r") as f:
+                            while True:  # Check CRC-32
+                                d = f.read(chunk_size)
+                                if not d:
+                                    break
+                                prog.advance(task, len(d))
+                    except BadZipFile:
+                        bad.add(zip)
+                        self.log.error(f"Corrupt zip file: [yellow]{zip}[/yellow]")
+            for zip_file in bad:
+                zip_file = zip_file.resolve()
+                self.log.info(f"Deleting: [yellow]{zip_file}[/yellow]")
+                zip_file.unlink()
+
     def write_pack_info(self):
         existing = {m['latest_file']: m for m in self.cached.values()}
-
 
     def update_custom_files(self, root=None):
         for filename, options in self.config.get('custom', {}).items():
@@ -673,7 +723,7 @@ class MainLauncher:
                     os.makedirs(filepath.parent, exist_ok=True)
                     filepath.write_text(file_data)
 
-    def force_resource_packs(self):
+    def write_options(self):
         resource = {k: self.cached[self.mapping[k]] for k in self.RESOURCES.keys() if self.RESOURCES[k][2] == 'resourcepacks'}
         if len(resource) == 0:
             return
@@ -683,7 +733,6 @@ class MainLauncher:
             packs = ['file/' + r['latest_file']['filename'] for r in resource.values()]
             options_file.write_text(f'resourcePacks:{json.dumps(packs)}')
             return
-        lines = []
         options = OrderedDict()
         for line in options_file.read_text().splitlines():
             key = line.split(':')[0]
@@ -706,6 +755,7 @@ class MainLauncher:
             return
         options['resourcePacks'] = json.dumps(packs_f)
         options['incompatibleResourcePacks'] = json.dumps(packs_f2)
+        options.update(self.config.get('client', {}).get('options', {}))
         self.log.info(f"Updating option [yellow]{options['resourcePacks']}")
         options_file.write_text('\n'.join([f'{k}:{v}' for k, v in options.items()]))
         #     resourcePacks:["vanilla","mod_resources","Moonlight Mods Dynamic Assets","firmalife_data","file/Serified Font v1.1 f1-34.zip"]
@@ -713,6 +763,7 @@ class MainLauncher:
     def start_server(self, directory: Path | str | None = None):
         server_dir: Path = self.inst.directory / 'server' if directory is None else Path(directory)
         server_dir.mkdir(exist_ok=True, parents=True)
+        self.log.info(f"Server directory: [yellow]{server_dir}")
         if not (server_dir / 'libraries').exists():
             os.symlink(self.launcher.root / 'libraries', server_dir / 'libraries')
         if not (server_dir / 'run.sh').exists():
@@ -797,6 +848,7 @@ class MainLauncher:
 
     def start_client(self, account_name=None, singleplayer=None, multiplayer=None, no_prime=False):
         self.log.info(f"Launching modpack [yellow]{self.PACK_NAME}")
+        self.log.info(f"Client directory: [yellow]{self.inst.directory / 'minecraft'}")
         self.inst.features = {
             'is_quick_play_singleplayer': singleplayer is not None,
             'is_quick_play_multiplayer': multiplayer is not None,
@@ -828,7 +880,7 @@ def main():
     parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
     parser.add_argument('--mutliplayer', default=None, help='Open mutliplayer server')
     parser.add_argument('pack_file', help='Modpack toml filename or url')
-    parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'dryrun'], help='Specify action to do')
+    parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
     args = parser.parse_args()
 
@@ -841,16 +893,18 @@ def main():
             ml.list_loader_versions()
             exit()
         ml.setup_files(args.update)
+        if args.action == 'check_zip':
+            ml.check_zip_files()
+            exit()
         if args.action == 'check':
             ml.list_mods_files()
             ml.save_mod_info()
-            exit()
         if args.action == 'server':
             ml.start_server()
             exit()
         ml.remove_old_mods()
         ml.setup_loader()
-        ml.force_resource_packs()
+        ml.write_options()
         ml.save_mod_info()
         if args.action == 'client':
             ml.start_client(args.account, args.singleplayer, args.mutliplayer, args.no_prime)
