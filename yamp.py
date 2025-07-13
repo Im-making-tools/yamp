@@ -6,11 +6,12 @@ import shutil
 import sys
 import time
 import urllib
-from collections import OrderedDict
+from collections import OrderedDict, namedtuple
 from contextlib import ExitStack
 import tomllib
 import os
 from datetime import datetime
+from itertools import chain
 from pathlib import Path
 import logging
 import subprocess
@@ -50,6 +51,55 @@ logging.basicConfig(
 )
 logging.getLogger("urllib3").setLevel(logging.ERROR)
 JAVA = shutil.which("java")
+
+JavaRuntime = namedtuple('JavaInstallation', ['ver', 'full_ver', 'runtime', 'bin'])
+
+def get_installation(binary) -> JavaRuntime:
+    if not os.access(binary, os.X_OK):
+        raise ValueError(f"Binary {binary} is not executable")
+    full_ver_str = subprocess.getoutput(f'{binary} -version')
+    java_ver_str, _, server_ver_str = full_ver_str.split('\n', 3)
+    try:
+        java_ver_str_split = java_ver_str.split(' ')
+        ver_str = java_ver_str_split[2].strip('"')
+        ver_parts = ver_str.split('_')[0].split('.')
+        major_ver = int(ver_parts[1] if ver_parts[0] == '1' else ver_parts[0])
+        runtime = 'openjdk'
+        if 'GraalVM' in server_ver_str:
+            runtime = 'graalvm'
+        return JavaRuntime(major_ver, ver_str, runtime, binary)
+    except (ValueError, IndexError):
+        raise ValueError(f'Failed to parse java version: {java_ver_str} given by {binary}')
+
+def installed_java_versions(search_path: str|Path = None, search_defaults=True) -> list[JavaRuntime]:
+    java_path_candidates_unix = [
+        '/usr/lib/jvm',
+    ]
+    java_path_candidates_nt = [
+        'C:/Program Files (x86)/Java',
+        'C:/Program Files/Java',
+        'C:/Program Files (x86)/Oracle/Java',
+        'C:/Program Files/Oracle/Java',
+    ]
+    java_path_candidates = []
+    if search_defaults:
+        java_path_candidates = java_path_candidates_nt if os.name == "nt" else java_path_candidates_unix
+    if search_path is not None:
+        java_path_candidates.append(search_path)
+    java_bin = 'java.exe' if os.name == "nt" else 'java'
+    versions = []
+    for path_str in java_path_candidates:
+        path = Path(path_str)
+        for binary in chain(path.glob(f'*/jre/bin/{java_bin}'), path.glob(f'*/bin/{java_bin}')):
+            java_root = path / binary.relative_to(path).parts[0]
+            if java_root.is_symlink() and  java_root.resolve().is_relative_to(path):
+                continue  # ignore symlinks that point back to other java versions
+            try:
+                java = get_installation(binary)
+                versions.append(java)
+            except ValueError as e:
+                console.print(f"[bright_red]ERROR[/bright_red] {e.args[0]}")
+    return versions
 
 url_to_name = {}
 class DownloadQueue:
@@ -112,6 +162,8 @@ class DownloadQueue:
             return True
         return asyncio.run(self.async_download())
 
+def get_content_file(h):
+    return re.findall("filename=\"?([^\"]+)\"?", h.headers['content-disposition'])[0]
 
 def download_override(self):
     q = DownloadQueue()
@@ -195,6 +247,7 @@ def find(root: dict, key: str, default=None):
         return default
     return d
 
+
 class MainLauncher:
     TIMEOUT = 20
     log = logging.getLogger('launcher')
@@ -224,6 +277,7 @@ class MainLauncher:
                 root_dir = os.environ.get("YAMP_ROOT", "~/Games/Minecraft")
         self.MINECRAFT_DIR = Path(root_dir).expanduser()
         self.DOWNLOADS = self.MINECRAFT_DIR / 'downloads'
+        self.JAVA_DIR = self.MINECRAFT_DIR / 'java'
 
         if config_file.startswith('http'):
             res = self.session.get(config_file)
@@ -252,7 +306,7 @@ class MainLauncher:
         self.es = ExitStack()
         self.es.__enter__()
         self.launcher = Launcher(self.es, root=self.MINECRAFT_DIR / "picomc")
-        self.am = AccountManager(self.launcher)
+        self.am = self.launcher.account_manager
         self.config = config
         self.inst = self.get_instance(java)
         self.cached = {}
@@ -277,6 +331,7 @@ class MainLauncher:
                     self.launcher.get_path(Directory.VERSIONS),
                     self.launcher.get_path(Directory.LIBRARIES),
                     self.MC_VERSION,
+                    self.LOADER_VER,
                     version_name=self.VERSION,
                 )
             else:
@@ -301,7 +356,7 @@ class MainLauncher:
 
 
     def get_instance(self, java) -> Instance:
-        im = InstanceManager(self.launcher)
+        im = self.launcher.instance_manager
         if not im.exists(self.PACK_NAME):
             inst = im.create(self.PACK_NAME, self.VERSION)
         else:
@@ -310,6 +365,27 @@ class MainLauncher:
             inst.config['java.memory.max'] = self.config['minecraft']['java_max_memory']
         if java:
             inst.config['java.path'] = str(java)
+        else:
+            version = self.launcher.version_manager.get_version(self.MC_VERSION)
+            java_ver = version.java_version.get('majorVersion', 8)
+            local_java_path = self.JAVA_DIR / f'openjdk_{java_ver}'
+            java_vers = {v.ver: v for v in installed_java_versions(local_java_path)}
+            if java_ver not in java_vers:
+                import jdk
+                dq = DownloadQueue()
+                jdk_url = jdk.get_download_url(version=str(java_ver))
+                h = self.session.head(jdk_url, allow_redirects=True)
+                jdk_file = self.DOWNLOADS / get_content_file(h)
+                local_java_path.mkdir(parents=True, exist_ok=True)
+                dq.add(h.url, jdk_file, int(h.headers.get('content-length', 0)))
+                self.log.info(f"Downloading [blue]java {java_ver}[/blue].. [gray50]{jdk_file}")
+                dq.download()
+                self.log.info(f"Decompressing [blue]java {java_ver}[/blue]..")
+                jdk_ext = jdk.extractor.get_compressed_file_ext(str(jdk_file))
+                jdk._decompress_archive(str(jdk_file), jdk_ext, str(local_java_path))
+                java_vers = {v.ver: v for v in installed_java_versions(local_java_path)}
+            inst.config['java.path'] = str(java_vers[java_ver].bin)
+            self.log.info(f"Using [blue]java {java_ver}[/blue] from [yellow]{java_vers[java_ver].bin}")
         inst.config['version'] = self.VERSION
         return inst
 
@@ -357,6 +433,8 @@ class MainLauncher:
             file = data['response']['download']
         else:
             files = sorted(filter(lambda x: self.MC_VERSION in x['versions'] and params['loader'].capitalize() in x['versions'], data['response']['files']), key=lambda x: -x['id'])
+            if len(files) == 0:  # try without loader
+                files = sorted(filter(lambda x: self.MC_VERSION in x['versions'], data['response']['files']), key=lambda x: -x['id'])
             if len(files) == 0:
                 versions = set(v for f in data['response']['files'] for v in f['versions'])
                 raise ValueError(f"No versions available for {find(data, 'response.title', '<no title>')} "
@@ -771,8 +849,7 @@ class MainLauncher:
             ver = f'{self.MC_VERSION}-{self.LOADER_VER}'
             h = self.session.head(f'https://maven.minecraftforge.net/net/minecraftforge/forge/{ver}/forge-{ver}-installer.jar')
             h.raise_for_status()
-            installer_file = self.DOWNLOADS / 'installers' / \
-                             re.findall("filename=\"?([^\"]+)\"?", h.headers['content-disposition'])[0]
+            installer_file = self.DOWNLOADS / 'installers' / get_content_file(h)
             dq = DownloadQueue()
             dq.add(h.url, installer_file, int(h.headers.get('content-length', 0)))
             self.log.info(f"Downloading [blue]server installer[/blue].. [gray50]{installer_file}")
@@ -840,7 +917,12 @@ class MainLauncher:
             srv_args += [f"-Xmx{self.config['minecraft']['java_max_memory']}"]
         if self.LOADER == 'forge':
             lib_file = 'win_args.txt' if os.name == 'nt' else 'unix_args.txt'
-            srv_args += ['@user_jvm_args.txt', f'@libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/{lib_file}']
+            lib_path = f'libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/{lib_file}'
+            jar_file = server_dir / f'libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/forge-{self.MC_VERSION}-{self.LOADER_VER}.jar'
+            if (server_dir / lib_path).exists():
+                srv_args += ['@user_jvm_args.txt', '@' + lib_file]
+            else:
+                srv_args += ['@user_jvm_args.txt', '-jar', str(jar_file)]
         if self.LOADER == 'fabric':
             srv_args += ['@user_jvm_args.txt', '-jar', str(fabric_jar_file)]
         srv_args += ['-nogui']
