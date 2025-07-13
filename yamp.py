@@ -234,7 +234,7 @@ class MainLauncher:
         config = tomllib.loads(config_data)
         self.MC_VERSION: str = config['minecraft']['version']
         self.LOADER: str = config['minecraft']['loader'].lower()
-        self.LOADER_VER: str = config['minecraft']['loader_ver']
+        self.LOADER_VER: str|None = config['minecraft'].get('loader_ver')
         self.VERSION: str = f"{self.MC_VERSION}-{self.LOADER}-{self.LOADER_VER}"
         self.PACK_NAME: str = config['minecraft']['pack_name']
         self.RESOURCES = {}
@@ -365,7 +365,7 @@ class MainLauncher:
         sid = str(file['id'])
         data['latest_file'] = {
             'filename': file['name'],
-            'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3]}/{sid[-3:]}/{file['name']}',
+            'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{file['name']}',
             'size': file['filesize'],
         }
         # res = self.session.head(data['latest_file']['url'])
@@ -482,7 +482,7 @@ class MainLauncher:
                         sid = str(files[0]['id'])
                         data['latest_file'] = {
                             'filename': files[0]['name'],
-                            'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3]}/{sid[-3:]}/{files[0]['name']}',
+                            'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{files[0]['name']}',
                             'size': files[0]['filesize'],
                         }
                         data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
@@ -739,8 +739,8 @@ class MainLauncher:
             value = ':'.join(line.split(':')[1:])
             options[key] = value
 
-        packs = json.loads(options['resourcePacks'])
-        packs2 = json.loads(options['incompatibleResourcePacks'])
+        packs = json.loads(options.get('resourcePacks', '[]'))
+        packs2 = json.loads(options.get('incompatibleResourcePacks', '[]'))
         packs_f = [p for p in packs if not p.startswith('file/')]
         packs_f2 = [p for p in packs2 if not p.startswith('file/')]
         added = False
@@ -766,25 +766,39 @@ class MainLauncher:
         self.log.info(f"Server directory: [yellow]{server_dir}")
         if not (server_dir / 'libraries').exists():
             os.symlink(self.launcher.root / 'libraries', server_dir / 'libraries')
-        if not (server_dir / 'run.sh').exists():
-            if self.LOADER == 'forge':
-                ver = f'{self.MC_VERSION}-{self.LOADER_VER}'
-                h = self.session.head(f'https://maven.minecraftforge.net/net/minecraftforge/forge/{ver}/forge-{ver}-installer.jar')
-            elif self.LOADER == 'fabric':
-                raise NotImplemented  # not tested. Probably will work out of the box
-                # res = self.session.get('https://mcutils.com/api/server-jars/fabric')
-            else:
-                raise ValueError(f'Unsupported loader: {self.LOADER}')
+        fabric_jar_file = self.DOWNLOADS / 'installers' / f'fabric_server_{self.MC_VERSION}.jar'
+        if self.LOADER == 'forge' and not (server_dir / 'run.sh').exists():
+            ver = f'{self.MC_VERSION}-{self.LOADER_VER}'
+            h = self.session.head(f'https://maven.minecraftforge.net/net/minecraftforge/forge/{ver}/forge-{ver}-installer.jar')
             h.raise_for_status()
-            installer_file = self.DOWNLOADS / 'installers' / re.findall("filename=\"?([^\"]+)\"?", h.headers['content-disposition'])[0]
+            installer_file = self.DOWNLOADS / 'installers' / \
+                             re.findall("filename=\"?([^\"]+)\"?", h.headers['content-disposition'])[0]
             dq = DownloadQueue()
-            dq.add(h.url, installer_file, int(h.headers['content-length']))
+            dq.add(h.url, installer_file, int(h.headers.get('content-length', 0)))
             self.log.info(f"Downloading [blue]server installer[/blue].. [gray50]{installer_file}")
             dq.download()
             self.log.info("Running [blue]server installer[/blue]..")
             subprocess.run([self.inst.get_java(), '-jar', str(installer_file), '--installServer'], cwd=server_dir)
+        elif self.LOADER == 'fabric' and not fabric_jar_file.exists():
+            res = self.session.get('https://mcutils.com/api/server-jars/fabric')
+            res.raise_for_status()
+            fabric_ver = {i['version']: i['url'] for i in res.json()}
+            if self.MC_VERSION not in fabric_ver:
+                raise Exception(f"No Fabric version found for {self.MC_VERSION}")
+            res = self.session.get(fabric_ver[self.MC_VERSION])
+            res.raise_for_status()
+            dq = DownloadQueue()
+            dq.add(res.json()['downloadUrl'], fabric_jar_file, 0)
+            self.log.info(f"Downloading [blue]server file[/blue].. [gray50]{fabric_jar_file}")
+            dq.download()
+        elif self.LOADER not in {'forge', 'fabric'}:
+            raise ValueError(f'Unsupported loader: {self.LOADER}')
+
         if not (server_dir / 'eula.txt').exists():
+            input("Press enter to accept the Minecraft EULA..")
             (server_dir / 'eula.txt').write_text('eula=TRUE\n')
+        if not (server_dir / 'user_jvm_args.txt').exists():
+            (server_dir / 'user_jvm_args.txt').write_text('# Uncomment the next line to set it.\n# -Xmx4G\n')
         if not (server_dir / 'server.properties').exists():
             fields = [f'{key}={value}' for key, value in self.config.get('server', {}).items()]
             (server_dir / 'server.properties').write_text('\n'.join(fields))
@@ -824,7 +838,12 @@ class MainLauncher:
         srv_args = [self.inst.get_java()]
         if 'java_max_memory' in self.config['minecraft']:
             srv_args += [f"-Xmx{self.config['minecraft']['java_max_memory']}"]
-        srv_args += ['@user_jvm_args.txt', f'@libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/unix_args.txt', '-nogui']
+        if self.LOADER == 'forge':
+            lib_file = 'win_args.txt' if os.name == 'nt' else 'unix_args.txt'
+            srv_args += ['@user_jvm_args.txt', f'@libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/{lib_file}']
+        if self.LOADER == 'fabric':
+            srv_args += ['@user_jvm_args.txt', '-jar', str(fabric_jar_file)]
+        srv_args += ['-nogui']
         self.log.info(f"[bright_blue]Starting server: [gray50]{' '.join(srv_args)}")
         subprocess.run(srv_args, cwd=server_dir)
 
