@@ -1,0 +1,17 @@
+[minecraft]
+version = '1.12.2'
+loader = 'forge'
+loader_ver = '14.23.5.2859'
+pack_name = 'test_pack_1_12_2'
+java_max_memory = '4G'
+
+[mods.238222]  # JEI
+[mods.460609]  # CensoredASM
+[mods.419286]  # MixinBooter
+[mods.248453]  # Shadowfacts' Forgelin
+
+[mods.236542]  # Advanced Rocketry
+[mods.236541]  # LibVulpes
+[mods.336895]  # NuclearCraft: Overhauled
+[mods.970462]  # RLFoliage
+[mods.300297]  # Project: Vibrant Journeys

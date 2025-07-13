@@ -1,0 +1,44 @@
+[minecraft]
+version = '1.21.1'
+loader = 'fabric'
+pack_name = 'fabric_vanilla_plus'
+java_max_memory = '3G'
+
+### Core mods
+[mods.sodium]
+[mods.iris]
+[mods.lithium]
+[mods.sodium-extra]
+[mods.modernfix]
+[mods.ebe]
+[mods.c2me-fabric]
+#[mods.lazydfu]
+#[mods.nvidium]
+[mods.no-chat-reports]
+[mods.entitytexturefeatures]
+[mods.entity-model-features]
+#[mods.continuity]
+[mods.ksyxis]
+[mods.no-telemetry]
+[mods.particle-core]
+[mods.sound-physics-remastered]
+#[mods.voxy]
+
+### Pretty things
+[mods.particle-rain]
+[mods.coolrain]
+[mods.dynamiccrosshair]
+[mods.make_bubbles_pop]
+[mods.cave-dust]
+[mods.visuality]
+[mods.wakes]
+[mods.snow-real-magic]
+[mods.dark-loading-screen]
+[mods.status-effect-bars]
+[mods.dripsounds]
+[mods.explosive-enhancement]
+[mods.immersivethunder]
+[mods.connectiblechains]
+#[mods.charmonium]
+[mods.presence-footsteps]
+[mods.cameraoverhaul]
