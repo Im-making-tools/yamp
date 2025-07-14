@@ -920,7 +920,7 @@ class MainLauncher:
             lib_path = f'libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/{lib_file}'
             jar_file = server_dir / f'libraries/net/minecraftforge/forge/{self.MC_VERSION}-{self.LOADER_VER}/forge-{self.MC_VERSION}-{self.LOADER_VER}.jar'
             if (server_dir / lib_path).exists():
-                srv_args += ['@user_jvm_args.txt', '@' + lib_file]
+                srv_args += ['@user_jvm_args.txt', '@' + lib_path]
             else:
                 srv_args += ['@user_jvm_args.txt', '-jar', str(jar_file)]
         if self.LOADER == 'fabric':
