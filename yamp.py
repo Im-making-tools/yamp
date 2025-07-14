@@ -979,7 +979,7 @@ def main():
     parser.add_argument('--no-prime', action='store_true', help='Disable prime rendering (linux with nvidia only, when disabled run on integrated gpu)')
     parser.add_argument('--java', default=None, help='Specify java path')
     parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
-    parser.add_argument('--mutliplayer', default=None, help='Open mutliplayer server')
+    parser.add_argument('--multiplayer', default=None, help='Open multiplayer server')
     parser.add_argument('pack_file', help='Modpack toml filename or url')
     parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
@@ -1008,7 +1008,7 @@ def main():
         ml.write_options()
         ml.save_mod_info()
         if args.action == 'client':
-            ml.start_client(args.account, args.singleplayer, args.mutliplayer, args.no_prime)
+            ml.start_client(args.account, args.singleplayer, args.multiplayer, args.no_prime)
 
 
 if __name__ == "__main__":
