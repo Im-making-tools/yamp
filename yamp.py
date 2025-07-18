@@ -1,5 +1,4 @@
 import asyncio
-import concurrent.futures
 import json
 import re
 import shutil
@@ -104,7 +103,7 @@ def installed_java_versions(search_path: str|Path = None, search_defaults=True) 
 url_to_name = {}
 class DownloadQueue:
     chunk_size = 1024 * 64
-    def __init__(self):
+    def __init__(self, cache_url=None):
         self.q = []
         self.size = 0
         self.sem = asyncio.Semaphore(5)
@@ -276,7 +275,7 @@ class MainLauncher:
             else:
                 root_dir = os.environ.get("YAMP_ROOT", "~/Games/Minecraft")
         self.MINECRAFT_DIR = Path(root_dir).expanduser()
-        self.DOWNLOADS = self.MINECRAFT_DIR / 'downloads'
+        self.DOWNLOAD_DIR = self.MINECRAFT_DIR / 'downloads'
         self.JAVA_DIR = self.MINECRAFT_DIR / 'java'
 
         if config_file.startswith('http'):
@@ -312,7 +311,7 @@ class MainLauncher:
         self.cached = {}
         self.db = {'_loaded': False}
         self.old_files = set()
-        self.DOWNLOADS.mkdir(parents=True, exist_ok=True)
+        self.DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
         self.mapping = {}  # mod mapping
 
     def setup_loader(self):
@@ -375,7 +374,7 @@ class MainLauncher:
                 dq = DownloadQueue()
                 jdk_url = jdk.get_download_url(version=str(java_ver))
                 h = self.session.head(jdk_url, allow_redirects=True)
-                jdk_file = self.DOWNLOADS / get_content_file(h)
+                jdk_file = self.DOWNLOAD_DIR / get_content_file(h)
                 local_java_path.mkdir(parents=True, exist_ok=True)
                 dq.add(h.url, jdk_file, int(h.headers.get('content-length', 0)))
                 self.log.info(f"Downloading [blue]java {java_ver}[/blue].. [gray50]{jdk_file}")
@@ -590,7 +589,7 @@ class MainLauncher:
             data['used'] = True
             data['disallow'] = opt.get('disallow', False) or opt.get('debug', False) and not self.debug
             filename_output: Path = self.inst.directory / 'minecraft' / data['type'] / data['latest_file']['filename']
-            filename: Path = self.DOWNLOADS / data['latest_file']['hash'] / data['latest_file']['filename']
+            filename: Path = self.DOWNLOAD_DIR / data['latest_file']['hash'] / data['latest_file']['filename']
             cache[data['rid']] = data
             self.mapping[rid] = data['rid']
             if not data['disallow']:
@@ -642,16 +641,16 @@ class MainLauncher:
         # Removes duplicates
         downloads = {hash: (url, fname, size) for url, fname, size, hash in downloads}
         for hash, (url, fname, size) in downloads.items():
-            if (self.DOWNLOADS / hash / fname.name).exists() or url.startswith('file://'):
+            if (self.DOWNLOAD_DIR / hash / fname.name).exists() or url.startswith('file://'):
                 continue
-            (self.DOWNLOADS / hash).mkdir(exist_ok=True)
-            dq.add(url, self.DOWNLOADS / hash / fname.name, size)
+            (self.DOWNLOAD_DIR / hash).mkdir(exist_ok=True)
+            dq.add(url, self.DOWNLOAD_DIR / hash / fname.name, size)
         if len(dq) > 0:
             self.log.info("Downloading [blue]mods[/blue]..")
             dq.download()
         for hash, (url, fname, size) in downloads.items():
             fname.parent.mkdir(parents=True, exist_ok=True)
-            src_file = self.DOWNLOADS / hash / fname.name
+            src_file = self.DOWNLOAD_DIR / hash / fname.name
             if url.startswith('file://'):
                 src_file = Path(url[7:])
             if update_symlink(src_file, fname):
@@ -844,12 +843,12 @@ class MainLauncher:
         self.log.info(f"Server directory: [yellow]{server_dir}")
         if not (server_dir / 'libraries').exists():
             os.symlink(self.launcher.root / 'libraries', server_dir / 'libraries')
-        fabric_jar_file = self.DOWNLOADS / 'installers' / f'fabric_server_{self.MC_VERSION}.jar'
+        fabric_jar_file = self.DOWNLOAD_DIR / 'installers' / f'fabric_server_{self.MC_VERSION}.jar'
         if self.LOADER == 'forge' and not (server_dir / 'run.sh').exists():
             ver = f'{self.MC_VERSION}-{self.LOADER_VER}'
             h = self.session.head(f'https://maven.minecraftforge.net/net/minecraftforge/forge/{ver}/forge-{ver}-installer.jar')
             h.raise_for_status()
-            installer_file = self.DOWNLOADS / 'installers' / get_content_file(h)
+            installer_file = self.DOWNLOAD_DIR / 'installers' / get_content_file(h)
             dq = DownloadQueue()
             dq.add(h.url, installer_file, int(h.headers.get('content-length', 0)))
             self.log.info(f"Downloading [blue]server installer[/blue].. [gray50]{installer_file}")
@@ -900,7 +899,7 @@ class MainLauncher:
                 self.log.warning(f"Unsupported: [bright_red]{trunc_title:30}\t[yellow]{fname}[/yellow]")
                 continue
             dest_file: Path = server_dir / 'mods' / fname
-            src_file = self.DOWNLOADS / hash / fname
+            src_file = self.DOWNLOAD_DIR / hash / fname
             self.log.info(f"Adding mod: [bright_blue]{trunc_title:30}\t[yellow]{fname}[/yellow]")
             if url.startswith('file://'):
                 src_file = Path(url[7:])
