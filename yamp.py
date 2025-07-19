@@ -987,6 +987,7 @@ def main():
     parser.add_argument('--java', default=None, help='Specify java path')
     parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
     parser.add_argument('--multiplayer', default=None, help='Open multiplayer server')
+    parser.add_argument('--timeout', default=30, type=int, help='Network connection timeout for downloading resources')
     parser.add_argument('pack_file', help='Modpack toml filename or url')
     parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
@@ -995,6 +996,7 @@ def main():
     import picomc.downloader
     import mock
     with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue):
+        MainLauncher.TIMEOUT = args.timeout
         ml = MainLauncher(args.pack_file, java=args.java, debug=args.debug)
         ml.log.setLevel(logging.INFO)
         if args.action == 'loader_vers':
