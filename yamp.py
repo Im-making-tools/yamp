@@ -1,9 +1,11 @@
 import asyncio
+import dataclasses
 import json
 import re
 import shutil
 import sys
 import time
+import typing
 import urllib
 from collections import OrderedDict, namedtuple
 from contextlib import ExitStack
@@ -247,6 +249,9 @@ def find(root: dict, key: str, default=None):
     return d
 
 
+Resource = typing.NamedTuple("Resource", [('name', str), ('source', str), ('type', str), ('options', dict)])
+
+
 class MainLauncher:
     TIMEOUT = 20
     log = logging.getLogger('launcher')
@@ -263,7 +268,7 @@ class MainLauncher:
                 source = 'url'
             else:
                 source = 'modrinth'
-            self.RESOURCES[f'{source}-{modid}'] = (modid, source, typ, options)
+            self.RESOURCES[f'{source}-{modid}'] = Resource(modid, source, typ, options)
 
 
     def __init__(self, config_file: str, root_dir: str|None = None, java: str|None = JAVA, debug=False):
@@ -290,7 +295,7 @@ class MainLauncher:
         self.LOADER_VER: str|None = config['minecraft'].get('loader_ver')
         self.VERSION: str = f"{self.MC_VERSION}-{self.LOADER}-{self.LOADER_VER}"
         self.PACK_NAME: str = config['minecraft']['pack_name']
-        self.RESOURCES = {}
+        self.RESOURCES: dict[str, Resource] = {}
         self.add_resources(config.get('mods', {}), 'mods')
         self.add_resources(config.get('resourcepacks', {}), 'resourcepacks')
         self.add_resources(config.get('shaders', {}), 'shaderpacks')
@@ -615,7 +620,7 @@ class MainLauncher:
             error |= error_dep
         return cache, downloads, error
 
-    def setup_files(self, update=False):
+    def setup_files(self, update=False, server=False):
         # Fetching all dependencies
         self.old_files = {file.name for file in (self.inst.directory / 'minecraft' / 'mods').glob('*.jar')}
         modlist_file: Path = self.inst.directory / 'minecraft' / 'mods' / '.mod_list.xz'
@@ -633,7 +638,10 @@ class MainLauncher:
             progress.TextColumn("[gray50]{task.fields[id]}"),
             console=console,
         ) as prog:
-            self.cached, downloads, error = self.fetch_resources(self.RESOURCES, {}, prog, check_update=update)
+            resources = self.RESOURCES
+            if server:
+                resources = {k: v for k, v in resources.items() if v.type == 'mods'}
+            self.cached, downloads, error = self.fetch_resources(resources, {}, prog, check_update=update)
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
         if error:
             raise Exception("Stopping because of previous errors")
@@ -801,7 +809,7 @@ class MainLauncher:
                     filepath.write_text(file_data)
 
     def write_options(self):
-        resource = {k: self.cached[self.mapping[k]] for k in self.RESOURCES.keys() if self.RESOURCES[k][2] == 'resourcepacks'}
+        resource = {k: self.cached[self.mapping[k]] for k in self.RESOURCES.keys() if self.RESOURCES[k].type == 'resourcepacks'}
         if len(resource) == 0:
             return
 
@@ -992,7 +1000,7 @@ def main():
         if args.action == 'loader_vers':
             ml.list_loader_versions()
             exit()
-        ml.setup_files(args.update)
+        ml.setup_files(args.update, server=args.action == 'server')
         if args.action == 'check_zip':
             ml.check_zip_files()
             exit()
