@@ -204,12 +204,12 @@ def get_manifest_override(self):
             m = requests.get(self.MANIFEST_URL, timeout=MainLauncher.TIMEOUT).json()
             manifest_filepath.write_text(json.dumps(m, indent=4, sort_keys=True))
             return m
-        except requests.ConnectionError or requests.exceptions.ReadTimeout:
+        except (requests.ConnectionError, requests.exceptions.ReadTimeout):
             logger.warning(
                 "Failed to retrieve version_manifest and no local version available."
                 "Check your internet connection."
             )
-            raise RuntimeError("Failed to retrieve version manifest.")
+            raise RuntimeError(f"Failed to retrieve version manifest {self.MANIFEST_URL}")
 
 
 VersionManager.get_manifest = get_manifest_override
