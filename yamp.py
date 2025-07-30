@@ -984,6 +984,7 @@ def main():
     parser.add_argument('-a', '--account', default=None, help='Minecraft username to use')
     parser.add_argument('-D', '--debug', action='store_true', help='Enable debug environment')
     parser.add_argument('--no-prime', action='store_true', help='Disable prime rendering (linux with nvidia only, when disabled run on integrated gpu)')
+    parser.add_argument('--no-greet', action='store_true', help='Do not print geeter')
     parser.add_argument('--java', default=None, help='Specify java path')
     parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
     parser.add_argument('--multiplayer', default=None, help='Open multiplayer server')
@@ -993,6 +994,21 @@ def main():
 
     args = parser.parse_args()
 
+    if not args.no_greet:
+        # Generated with https://pypi.org/project/art/
+        console.print(r"""[bright_blue]                  ___           ___           ___   
+      ___        /  /\         /__/\         /  /\  
+     /__/|      /  /::\       |  |::\       /  /::\ 
+    |  |:|     /  /:/\:\      |  |:|:\     /  /:/\:\
+    |  |:|    /  /:/~/::\   __|__|:|\:\   /  /:/~/:/
+  __|__|:|   /__/:/ /:/\:\ /__/::::| \:\ /__/:/ /:/ 
+ [bright_yellow]/__/::::\   \  \:\/:/__\/ \  \:\~~\__\/ \  \:\/:/  
+    ~\~~\:\   \  \::/       \  \:\        \  \::/   
+      \  \:\   \  \:\        \  \:\        \  \:\   
+       \__\/    \  \:\        \  \:\        \  \:\  
+                 \__\/         \__\/         \__\/                    
+       [italic gray50]Yet Another Minecraft Packmaker.
+        """)
     import picomc.downloader
     import mock
     with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue):
