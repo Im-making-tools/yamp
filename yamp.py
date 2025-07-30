@@ -271,7 +271,7 @@ class MainLauncher:
             self.RESOURCES[f'{source}-{modid}'] = Resource(modid, source, typ, options)
 
 
-    def __init__(self, config_file: str, root_dir: str|None = None, java: str|None = JAVA, debug=False):
+    def __init__(self, es, config_file: str, root_dir: str|None = None, java: str|None = JAVA, debug=False):
         self.session = requests.Session()
         self.debug = debug
         if not root_dir:
@@ -307,8 +307,7 @@ class MainLauncher:
             'file': self._fetch_url_resource,
         }
 
-        self.es = ExitStack()
-        self.es.__enter__()
+        self.es = es
         self.launcher = Launcher(self.es, root=self.MINECRAFT_DIR / "picomc")
         self.am = self.launcher.account_manager
         self.config = config
@@ -1011,9 +1010,9 @@ def main():
         """)
     import picomc.downloader
     import mock
-    with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue):
+    with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue), ExitStack() as es:
         MainLauncher.TIMEOUT = args.timeout
-        ml = MainLauncher(args.pack_file, java=args.java, debug=args.debug)
+        ml = MainLauncher(es, args.pack_file, java=args.java, debug=args.debug)
         ml.log.setLevel(logging.INFO)
         if args.action == 'loader_vers':
             ml.list_loader_versions()
