@@ -102,6 +102,28 @@ def installed_java_versions(search_path: str|Path = None, search_defaults=True) 
                 console.print(f"[bright_red]ERROR[/bright_red] {e.args[0]}")
     return versions
 
+def test_symlink():
+    """ Symbolic links are not a thing by default only on windows """
+    if os.name != 'nt':
+        return
+    import tempfile
+    tmp_dir = Path(tempfile.gettempdir())
+    symlink_dest = tmp_dir / '.yamp_symlink_test'
+    try:
+        os.symlink(tmp_dir, symlink_dest)
+    except OSError as e:
+        if e.winerror == 1314:  # No permissions. Win10/11 needs developer mode.
+            print("[bold]YAMP[/bold] uses symbolic links to save disk space. "
+                             "This feature is not enabled by default on windows."
+                             "To enable, please turn [green]on[/green] [yellow]Developer Mode")
+            subprocess.run(['powershell', '-command', 'Start-Process "ms-settings:developers"'])
+            exit(1)
+        else:
+            raise e
+    finally:
+        symlink_dest.unlink(missing_ok=True)
+
+
 url_to_name = {}
 class DownloadQueue:
     chunk_size = 1024 * 64
@@ -992,7 +1014,7 @@ def main():
     parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
     args = parser.parse_args()
-
+    test_symlink()
     if not args.no_greet:
         # Generated with https://pypi.org/project/art/
         console.print(r"""[bright_blue]                  ___           ___           ___   
