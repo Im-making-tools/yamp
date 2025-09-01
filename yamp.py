@@ -58,8 +58,10 @@ JavaRuntime = namedtuple('JavaInstallation', ['ver', 'full_ver', 'runtime', 'bin
 def get_installation(binary) -> JavaRuntime:
     if not os.access(binary, os.X_OK):
         raise ValueError(f"Binary {binary} is not executable")
-    full_ver_str = subprocess.getoutput(f'{binary} -version')
-    java_ver_str, _, server_ver_str = full_ver_str.split('\n', 3)
+    full_ver_str = subprocess.getoutput(f'{binary} -version').split('\n')
+    if len(full_ver_str) < 3:
+        raise ValueError(f"Binary {binary} returned invalid version: {full_ver_str}")
+    java_ver_str, _, server_ver_str = full_ver_str[-3:]
     try:
         java_ver_str_split = java_ver_str.split(' ')
         ver_str = java_ver_str_split[2].strip('"')
