@@ -815,14 +815,46 @@ class MainLauncher:
             file_data = None
             if 'content' in options:
                 file_data = options['content']
-            elif 'json' in options:
-                if filepath.exists() and options.get('json_update', False):
-                    exising_data = json.loads(filepath.read_bytes())
-                    if isinstance(exising_data, dict):
-                        exising_data.update(options['json'])
+            elif 'update' in options:
+                if filename.lower().endswith('.json'):
+                    loader = json.loads
+                    dumper = lambda x: json.dumps(x, indent=4)
+                elif filename.lower().endswith('.json5'):
+                    import json5
+                    loader = json5.loads
+                    dumper = lambda x: json5.dumps(x, indent=4)
+                elif filename.lower().endswith('.toml'):
+                    import tomli_w
+                    loader = tomllib.loads
+                    dumper = tomli_w.dumps
+                elif filename.lower().endswith('.yaml'):
+                    from ruamel.yaml import YAML
+                    import io
+                    yaml = YAML()
+                    dump_stream = io.StringIO()
+                    loader = yaml.load
+                    def dumper(obj):
+                        yaml.dump(obj, stream=dump_stream)
+                        output_str = dump_stream.getvalue()
+                        dump_stream.close()
+                        return output_str
                 else:
-                    exising_data = options['json']
-                file_data = json.dumps(exising_data)
+                    # TODO: add jsonc, cfg
+                    raise ValueError(f"Unsupported file extension: {filename}")
+                if filepath.exists():
+                    exising_data = loader(filepath.read_text())
+                    if isinstance(exising_data, dict):
+                        exising_data.update(options['update'])
+                    else:
+                        raise ValueError(f"Unsupported file content type {type(exising_data)}: {filename}")
+                else:
+                    exising_data = options['update']
+                file_data = dumper(exising_data)
+            elif 'replace' in options:
+                if filepath.exists():
+                    file_data = filepath.read_text()
+                    for key, value in options['replace'].items():
+                        file_data = file_data.replace(key, value)
             if file_data is not None:
                 current_hash = xxhash.xxh64(filepath.read_bytes().strip() if filepath.exists() else b'').digest()
                 update_hash = xxhash.xxh64(file_data.encode().strip()).digest()
