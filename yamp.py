@@ -520,7 +520,7 @@ class MainLauncher:
         if not any_version:
             params['game_versions'] = json.dumps([self.MC_VERSION])
         if typ == "mods":
-            params['loaders'] = json.dumps([options.get('loader', self.LOADER)])
+            params['loaders'] = json.dumps([options.get('loader', self.LOADER), "datapack"])
         res = self.session.get(f'https://api.modrinth.com/v2/project/{modid}/version', params=params, timeout=self.TIMEOUT)
         res.raise_for_status()
         res_data = res.json()
