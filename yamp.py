@@ -526,7 +526,7 @@ class MainLauncher:
         res_data = res.json()
         if len(res_data) == 0:
             res2 = self.session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT).json()
-            raise ValueError(f"No versions available for {res2['title']} {modid} (https://modrinth.com/mod/{res2['slug']})")
+            raise ValueError(f"No versions available for {res2['title']} {modid} https://modrinth.com/mod/{res2['slug']}, available: {', '.join(res2['game_versions'])}")
         response = res_data[0]
         if version_id is not None:
             response = next(filter(lambda x: x['id'] == version_id, response))
