@@ -392,7 +392,7 @@ class MainLauncher:
             inst.config['java.memory.max'] = self.config['minecraft']['java_max_memory']
         if java:
             inst.config['java.path'] = str(java)
-        else:
+        elif 'java.path' not in inst.config or not Path(inst.config['java.path']).exists():
             version = self.launcher.version_manager.get_version(self.MC_VERSION)
             java_ver = version.java_version.get('majorVersion', 8)
             local_java_path = self.JAVA_DIR / f'openjdk_{java_ver}'
