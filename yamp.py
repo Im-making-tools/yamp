@@ -323,6 +323,7 @@ class MainLauncher:
         self.add_resources(config.get('mods', {}), 'mods')
         self.add_resources(config.get('resourcepacks', {}), 'resourcepacks')
         self.add_resources(config.get('shaders', {}), 'shaderpacks')
+        self.add_resources(config.get('datapacks', {}), 'datapacks')
 
         self.SOURCE_MAP = {
             'curseforge': self._fetch_curseforge_resource,
@@ -520,13 +521,15 @@ class MainLauncher:
         if not any_version:
             params['game_versions'] = json.dumps([self.MC_VERSION])
         if typ == "mods":
-            params['loaders'] = json.dumps([options.get('loader', self.LOADER), "datapack"])
+            params['loaders'] = json.dumps([options.get('loader', self.LOADER)])
+        elif typ == "datapack":
+            params['loaders'] = json.dumps([options.get('loader', 'datapack')])
         res = self.session.get(f'https://api.modrinth.com/v2/project/{modid}/version', params=params, timeout=self.TIMEOUT)
         res.raise_for_status()
         res_data = res.json()
         if len(res_data) == 0:
             res2 = self.session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT).json()
-            raise ValueError(f"No versions available for {res2['title']} {modid} https://modrinth.com/mod/{res2['slug']}, available: {', '.join(res2['game_versions'])}")
+            raise ValueError(f"No versions available for {res2['title']} {modid} https://modrinth.com/mod/{res2['slug']}, available: {', '.join(res2['game_versions'])} for [cyan]{'[/cyan], [cyan]'.join(res2['loaders'])}[/cyan]")
         response = res_data[0]
         if version_id is not None:
             response = next(filter(lambda x: x['id'] == version_id, response))
@@ -685,7 +688,7 @@ class MainLauncher:
             if url.startswith('file://'):
                 src_file = Path(url[7:])
             if update_symlink(src_file, fname):
-                self.log.info(f"Updated mod file [yellow]{fname.name}")
+                self.log.info(f"Updated file [yellow]{fname.parent.name}/{fname.name}")
             if fname.name in self.old_files:
                 self.old_files.remove(fname.name)
         # for mod in self.cached.values():
