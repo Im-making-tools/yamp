@@ -196,6 +196,9 @@ def download_override(self):
     q.size = self.size
     return q.download()
 
+def file_with_dir(path: Path) -> str:
+    return f'{path.parent.name}/{path.name}'
+
 OriginalDownloadQueue.download = download_override
 
 
@@ -666,7 +669,7 @@ class MainLauncher:
         ) as prog:
             resources = self.RESOURCES
             if server:
-                resources = {k: v for k, v in resources.items() if v.type == 'mods'}
+                resources = {k: v for k, v in resources.items() if v.type in {'mods', 'datapacks'}}
             self.cached, downloads, error = self.fetch_resources(resources, {}, prog, check_update=update)
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
         if error:
@@ -688,7 +691,7 @@ class MainLauncher:
             if url.startswith('file://'):
                 src_file = Path(url[7:])
             if update_symlink(src_file, fname):
-                self.log.info(f"Updated file [yellow]{fname.parent.name}/{fname.name}")
+                self.log.info(f"Updated file [yellow]{file_with_dir(fname)}")
             if fname.name in self.old_files:
                 self.old_files.remove(fname.name)
         # for mod in self.cached.values():
@@ -937,7 +940,7 @@ class MainLauncher:
             raise ValueError(f'Unsupported loader: {self.LOADER}')
 
         if not (server_dir / 'eula.txt').exists():
-            input("Press enter to accept the Minecraft EULA..")
+            console.input("Press [bold cyan]enter[/bold cyan] to accept the Minecraft EULA..")
             (server_dir / 'eula.txt').write_text('eula=TRUE\n')
         if not (server_dir / 'user_jvm_args.txt').exists():
             (server_dir / 'user_jvm_args.txt').write_text('# Uncomment the next line to set it.\n# -Xmx4G\n')
@@ -945,10 +948,11 @@ class MainLauncher:
             fields = [f'{key}={value}' for key, value in self.config.get('server', {}).items()]
             (server_dir / 'server.properties').write_text('\n'.join(fields))
         (server_dir / 'mods').mkdir(exist_ok=True)
-        old_files = {file.name for file in (server_dir / 'mods').glob('*.jar')}
+        (server_dir / 'datapacks').mkdir(exist_ok=True)
+        old_files = set((server_dir / 'mods').glob('*.jar')) | set((server_dir / 'datapacks').glob('*.zip'))
         added = set()
         for mod in self.cached.values():
-            if not mod['used'] or mod['type'] != 'mods' or mod['disallow'] or mod['options'].get('client_only', False):
+            if not mod['used'] or mod['type'] not in {'mods', 'datapacks'} or mod['disallow'] or mod['options'].get('client_only', False):
                 continue
             if mod['rid'] in added:
                 continue
@@ -964,18 +968,18 @@ class MainLauncher:
             if not mod['options'].get('server_side', info.get('server_side') != 'unsupported'):
                 self.log.warning(f"Unsupported: [bright_red]{trunc_title:30}\t[yellow]{fname}[/yellow]")
                 continue
-            dest_file: Path = server_dir / 'mods' / fname
+            dest_file: Path = server_dir / mod['type'] / fname
             src_file = self.DOWNLOAD_DIR / hash / fname
             self.log.info(f"Adding mod: [bright_blue]{trunc_title:30}\t[yellow]{fname}[/yellow]")
             if url.startswith('file://'):
                 src_file = Path(url[7:])
             update_symlink(src_file, dest_file)
-            if fname in old_files:
-                old_files.remove(fname)
+            if dest_file in old_files:
+                old_files.remove(dest_file)
         self.save_mod_info()
         for old_file in old_files:
-            self.log.warning(f"Removing mod file [yellow]{old_file}")
-            os.remove(server_dir / 'mods' / old_file)
+            self.log.warning(f"Removing mod file [yellow]{file_with_dir(old_file)}")
+            old_file.unlink(missing_ok=True)
         self.update_custom_files(server_dir)
         srv_args = [self.inst.get_java()]
         if 'java_max_memory' in self.config['minecraft']:
