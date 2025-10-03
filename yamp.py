@@ -20,9 +20,6 @@ import lzma
 from urllib.parse import urlparse
 from zipfile import ZipFile, BadZipFile
 
-picomc_source = os.path.join(os.path.dirname(os.path.realpath(__file__)), 'picomc', 'src')
-if os.path.exists(picomc_source):  # For debugging
-    sys.path.insert(0, picomc_source)
 
 from picomc.version import VersionManager
 from picomc.launcher import Launcher
