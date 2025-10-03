@@ -669,7 +669,9 @@ class MainLauncher:
         ) as prog:
             resources = self.RESOURCES
             if server:
-                resources = {k: v for k, v in resources.items() if v.type in {'mods', 'datapacks'}}
+                resources = {k: v for k, v in resources.items() if v.type in {'mods', 'datapacks'} and v.options.get('server_side', True)}
+            else:
+                resources = {k: v for k, v in resources.items() if v.options.get('client_side', True)}
             self.cached, downloads, error = self.fetch_resources(resources, {}, prog, check_update=update)
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
         if error:
@@ -752,6 +754,8 @@ class MainLauncher:
             if 'server_side' in mod['options']:
                 server_side = Text('enabled' if mod['options']['server_side'] else 'disabled', style="bright_yellow")
             client_side = qr.get('client_side', Text('yes?', style="bright_yellow"))
+            if 'client_side' in mod['options']:
+                client_side = Text('enabled' if mod['options']['client_side'] else 'disabled', style="bright_yellow")
             proj_id = mod.get('response', {}).get('project_id', '')
             dep = '\n'.join(dependents.get(proj_id, []))
             table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'])
