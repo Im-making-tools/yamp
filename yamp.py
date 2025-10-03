@@ -11,6 +11,7 @@ from collections import OrderedDict, namedtuple
 from contextlib import ExitStack
 import tomllib
 import os
+import platform
 from datetime import datetime
 from itertools import chain
 from pathlib import Path
@@ -314,6 +315,8 @@ class MainLauncher:
         else:
             config_data = Path(config_file).read_text()
         config = tomllib.loads(config_data)
+        self.PLATFORM: set[str] = {platform.system().lower(), platform.machine()}
+        self.log.info('Platform: [bright_blue]' + '[/bright_blue], [bright_blue]'.join(sorted(self.PLATFORM)))
         self.MC_VERSION: str = config['minecraft']['version']
         self.LOADER: str = config['minecraft']['loader'].lower()
         self.LOADER_VER: str|None = config['minecraft'].get('loader_ver')
@@ -342,6 +345,22 @@ class MainLauncher:
         self.old_files = set()
         self.DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
         self.mapping = {}  # mod mapping
+
+    def platform_check(self, tags, server):
+        """ Returns True if platfrom is ok """
+        skip = False
+        if tags is None:
+            return True
+        if isinstance(tags, str):
+            tags = [tags]
+        extra_tag = 'server' if server else 'client'
+        for string in tags:
+            tag_match = True
+            for tag in string.split(' '):
+                tag = tag.lower()
+                tag_match &= tag in self.PLATFORM or tag.lower() == extra_tag
+            skip |= tag_match
+        return not skip
 
     def setup_loader(self):
         loader_dir = self.launcher.get_path(Directory.VERSIONS) / self.VERSION
@@ -666,9 +685,18 @@ class MainLauncher:
         ) as prog:
             resources = self.RESOURCES
             if server:
-                resources = {k: v for k, v in resources.items() if v.type in {'mods', 'datapacks'} and v.options.get('server_side', True)}
+                resources = {
+                    k: v for k, v in resources.items() if
+                        v.type in {'mods', 'datapacks'} and
+                        v.options.get('server_side', True) and
+                        self.platform_check(v.options.get('skip_platform'), True)
+                    }
             else:
-                resources = {k: v for k, v in resources.items() if v.options.get('client_side', True)}
+                resources = {
+                    k: v for k, v in resources.items() if
+                        v.options.get('client_side', True) and
+                        self.platform_check(v.options.get('skip_platform'), False)
+                }
             self.cached, downloads, error = self.fetch_resources(resources, {}, prog, check_update=update)
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
         if error:
