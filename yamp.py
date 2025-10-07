@@ -279,6 +279,7 @@ Resource = typing.NamedTuple("Resource", [('name', str), ('source', str), ('type
 
 class MainLauncher:
     TIMEOUT = 20
+    CONCURENCY = 5
     log = logging.getLogger('launcher')
 
     def add_resources(self, cfg, typ):
@@ -436,7 +437,7 @@ class MainLauncher:
         inst.config['version'] = self.VERSION
         return inst
 
-    def _fetch_url_resource(self, modid, typ, name=None, url=None, **kw):
+    async def _fetch_url_resource(self, modid, typ, session, name=None, url=None, **kw):
         if url is None:
             self.log.warning(f"URL source [yellow]{modid}[/yellow] requires url parameter")
             return
@@ -455,7 +456,7 @@ class MainLauncher:
             }
             data['name'] = f"{modid} (local file)"
         else:
-            res = self.session.head(url)
+            res = await session.head(url)
             res.raise_for_status()
             data['latest_file'] = {
                     'filename': modid,
@@ -467,15 +468,16 @@ class MainLauncher:
         return data
 
 
-    def _fetch_curseforge_resource(self, modid, typ, any_version=False, **options):
+    async def _fetch_curseforge_resource(self, modid, typ, session, any_version=False, **options):
         params = {}
         if not any_version:
             params['version'] = self.MC_VERSION
         if typ == "mods":
             params['loader'] = options.get('loader', self.LOADER)  # in case cross-loader mods used
-        res = self.session.get(f'https://api.cfwidget.com/minecraft/mc-mods/{modid}', params=params)
+        res = await session.get(f'https://api.cfwidget.com/minecraft/mc-mods/{modid}', params=params)
         res.raise_for_status()
-        data = {'response': res.json(), 'source': 'curseforge', 'type': typ, 'last_checked': time.time()}
+        res_data = await res.json()
+        data = {'response': res_data, 'source': 'curseforge', 'type': typ, 'last_checked': time.time()}
         if 'download' in data['response']:
             file = data['response']['download']
         else:
@@ -500,19 +502,6 @@ class MainLauncher:
         data['dependencies'] = {}
         return data
 
-    # def get_mod_info(self):
-    #     mod_ids = [data['response']['project_id'] for data in self.cached.values() if data['used'] and data['source'] == 'modrinth']
-    #     if len(mod_ids) > 0:
-    #         res = self.session.get("https://api.modrinth.com/v2/projects", params={'ids': json.dumps(mod_ids)}, timeout=2)
-    #         res.raise_for_status()
-    #         docs = {hash(f'modrinth-project-{proj["id"]}'): proj for proj in res.json()}
-    #         doc_ids = set(docs.keys())
-    #         new_ids = doc_ids.difference({d.doc_id for d in self.db.get(doc_ids=list(doc_ids))})
-    #         old_ids = doc_ids.difference(new_ids)
-    #         self.db.remove(doc_ids=list(old_ids))
-    #         extras = {'_source': 'modrinth', '_doc_type': 'project'}
-    #         self.db.insert_multiple([Document(dict(**docs[did], **extras), did) for did in doc_ids])
-
     def find_mod_info(self, mod_id):
         mod = self.cached[mod_id]
         resp = mod.get('response', {})
@@ -535,7 +524,7 @@ class MainLauncher:
     def save_mod_info(self):
         save_json_xz(self.MINECRAFT_DIR / 'project_cache.xz', self.db)
 
-    def _fetch_modrinth_resource(self, modid, typ, any_version=False, version_id=None, version_number=None, **options):
+    async def _fetch_modrinth_resource(self, modid, typ, session, any_version=False, version_id=None, version_number=None, **options):
         params = {}
         if not any_version:
             params['game_versions'] = json.dumps([self.MC_VERSION])
@@ -543,12 +532,13 @@ class MainLauncher:
             params['loaders'] = json.dumps([options.get('loader', self.LOADER)])
         elif typ == "datapack":
             params['loaders'] = json.dumps([options.get('loader', 'datapack')])
-        res = self.session.get(f'https://api.modrinth.com/v2/project/{modid}/version', params=params, timeout=self.TIMEOUT)
+        res = await session.get(f'https://api.modrinth.com/v2/project/{modid}/version', params=params, timeout=self.TIMEOUT)
         res.raise_for_status()
-        res_data = res.json()
+        res_data = await res.json()
         if len(res_data) == 0:
-            res2 = self.session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT).json()
-            raise ValueError(f"No versions available for {res2['title']} {modid} https://modrinth.com/mod/{res2['slug']}, available: {', '.join(res2['game_versions'])} for [cyan]{'[/cyan], [cyan]'.join(res2['loaders'])}[/cyan]")
+            res2 = await session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT)
+            res2_data = await res2.json()
+            raise ValueError(f"No versions available for {res2_data['title']} {modid} https://modrinth.com/mod/{res2_data['slug']}, available: {', '.join(res2_data['game_versions'])} for [cyan]{'[/cyan], [cyan]'.join(res2_data['loaders'])}[/cyan]")
         response = res_data[0]
         if version_id is not None:
             response = next(filter(lambda x: x['id'] == version_id, response))
@@ -570,99 +560,113 @@ class MainLauncher:
         } if typ == 'mods' else {}
         return data
 
-    def fetch_resources(self, resources, cache, prog, message='Fetching projects', check_update=False, requested_by='config'):
+    async def fetch_resources_async(self, resources, cache, prog: progress.Progress, message='Fetching projects', check_update=False):
+        task_queue = asyncio.Queue()
         downloads = []
-        task = prog.add_task(message, total=len(resources), id='')
-        error = False
+        queued = set()
         added = set()
+        error = False
+
+        async def _worker(session):
+            nonlocal error
+            while not task_queue.empty():
+                requested_by = 'config'
+                rid, values = await task_queue.get()
+                prog.update(task, id=rid)
+
+                if len(values) == 2:
+                    values, requested_by = values
+                if len(values) == 3:
+                    modid, source, typ = values
+                    opt = {}
+                else:
+                    modid, source, typ, opt = values
+                resolved_rid = self.mapping.get(rid, rid)
+                data = cache.get(resolved_rid, self.cached.get(resolved_rid, {}))
+                version_match = True
+
+                # Just check if version/loader still match what's in cache (in case mc version is changed in .toml)
+                if 'response' in data and 'source' in data:
+                    local_loader = opt.get('loader', self.LOADER)
+                    if data['source'] == 'modrinth':
+                        version_match &= opt.get('incompatible', False) or self.MC_VERSION in data['response'][
+                            'game_versions']
+                        version_match &= data['type'] != 'mods' or local_loader in data['response']['loaders']
+                    elif data['source'] == 'curseforge':
+                        versions = data['response']['files']
+                        if not opt.get('incompatible', False):
+                            versions = filter(
+                                lambda x: self.MC_VERSION in x['versions'] and (
+                                        data['type'] != 'mods' or local_loader.capitalize() in x['versions']
+                                ), data['response']['files']
+                            )
+                        files = list(sorted(versions, key=lambda x: -x['id']))  # get latest
+                        if len(files) == 0:
+                            version_match = False
+                        else:
+                            sid = str(files[0]['id'])
+                            data['latest_file'] = {
+                                'filename': files[0]['name'],
+                                'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{files[0]['name']}',
+                                'size': files[0]['filesize'],
+                            }
+                            data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
+                if 'type' not in data or check_update or not version_match:
+                    try:
+                        data = await self.SOURCE_MAP[source](modid, typ, session, **opt)
+                    except aiohttp.exceptions.ReadTimeout:
+                        self.log.error(f"Fetching [gray50]{rid}[/gray50] timed out")
+                        error = True
+                    except aiohttp.exceptions.HTTPError as e:
+                        self.log.error(
+                            f"Fetching [gray50]{rid}[/gray50] returned server status {e.response.status_code}")
+                        if e.response.status_code == 429:  # server busy, lets put to end of the queue and try again
+                            task_queue.add((rid, values))
+                        else:
+                            error = True
+                    except ValueError as e:
+                        req_str = requested_by
+                        if requested_by in cache:
+                            req_str += f" ({cache[requested_by]['latest_file']['filename']})"
+                        self.log.error(f"{e.args[0]}, requested by {req_str}")
+                        error = True
+                prog.update(task, advance=1)
+                if 'rid' not in data:
+                    continue
+                if data['rid'] not in cache or 'requested_by' not in data:
+                    data['requested_by'] = set(requested_by)
+                    data['options'] = opt
+                else:
+                    data['requested_by'].add(requested_by)
+                    data['options'].update(opt)
+                data['used'] = True
+                data['disallow'] = opt.get('disallow', False) or opt.get('debug', False) and not self.debug
+                filename_output: Path = self.inst.directory / 'minecraft' / data['type'] / data['latest_file']['filename']
+                filename: Path = self.DOWNLOAD_DIR / data['latest_file']['hash'] / data['latest_file']['filename']
+                cache[data['rid']] = data
+                self.mapping[rid] = data['rid']
+                if not data['disallow']:
+                    url_to_name[data['latest_file']['url']] = data['rid'], data['latest_file']['filename']
+                    downloads.append((data['latest_file']['url'], filename_output, data['latest_file']['size'],
+                                      data['latest_file']['hash']))
+                if not data['disallow']:
+                    added.add(data['rid'])
+                if data['options'].get('ignore_dep'):
+                    continue
+                for drid, dval in data['dependencies'].items():
+                    if drid in queued:
+                        continue
+                    queued.add(drid)
+                    await task_queue.put((drid, (dval, rid)))
+                    prog.update(task, total=prog.tasks[task].total + 1)
+
+        task = prog.add_task(message, total=len(resources), id='')
         for rid, values in resources.items():
-            prog.update(task, id=rid)
-            if len(values) == 2:
-                values, requested_by = values
-            if len(values) == 3:
-                modid, source, typ = values
-                opt = {}
-            else:
-                modid, source, typ, opt = values
-            resolved_rid = self.mapping.get(rid, rid)
-            data = cache.get(resolved_rid, self.cached.get(resolved_rid, {}))
-            version_match = True
-
-            # Just check if version/loader still match what's in cache (in case mc version is changed in .toml)
-            if 'response' in data and 'source' in data:
-                local_loader = opt.get('loader', self.LOADER)
-                if data['source'] == 'modrinth':
-                    version_match &= opt.get('incompatible', False) or self.MC_VERSION in data['response']['game_versions']
-                    version_match &= data['type'] != 'mods' or local_loader in data['response']['loaders']
-                elif data['source'] == 'curseforge':
-                    versions = data['response']['files']
-                    if not opt.get('incompatible', False):
-                        versions = filter(
-                            lambda x: self.MC_VERSION in x['versions'] and (
-                                    data['type'] != 'mods' or local_loader.capitalize() in x['versions']
-                            ), data['response']['files']
-                        )
-                    files = list(sorted(versions, key=lambda x: -x['id']))  # get latest
-                    if len(files) == 0:
-                        version_match = False
-                    else:
-                        sid = str(files[0]['id'])
-                        data['latest_file'] = {
-                            'filename': files[0]['name'],
-                            'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{files[0]['name']}',
-                            'size': files[0]['filesize'],
-                        }
-                        data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
-            if 'type' not in data or check_update or not version_match:
-                try:
-                    data = self.SOURCE_MAP[source](modid, typ, **opt)
-                except requests.exceptions.ReadTimeout:
-                    self.log.error(f"Fetching [gray50]{rid}[/gray50] timed out")
-                    error = True
-                except requests.exceptions.HTTPError as e:
-                    self.log.error(f"Fetching [gray50]{rid}[/gray50] returned server status {e.response.status_code}")
-                    error = True
-                except ValueError as e:
-                    req_str = requested_by
-                    if requested_by in cache:
-                        req_str += f" ({cache[requested_by]['latest_file']['filename']})"
-                    self.log.error(f"{e.args[0]}, requested by {req_str}")
-                    error = True
-            if 'rid' not in data:
-                continue
-            if data['rid'] not in cache or 'requested_by' not in data:
-                data['requested_by'] = set(requested_by)
-                data['options'] = opt
-            else:
-                data['requested_by'].add(requested_by)
-                data['options'].update(opt)
-            data['used'] = True
-            data['disallow'] = opt.get('disallow', False) or opt.get('debug', False) and not self.debug
-            filename_output: Path = self.inst.directory / 'minecraft' / data['type'] / data['latest_file']['filename']
-            filename: Path = self.DOWNLOAD_DIR / data['latest_file']['hash'] / data['latest_file']['filename']
-            cache[data['rid']] = data
-            self.mapping[rid] = data['rid']
-            if not data['disallow']:
-                url_to_name[data['latest_file']['url']] = data['rid'], data['latest_file']['filename']
-                downloads.append((data['latest_file']['url'], filename_output, data['latest_file']['size'], data['latest_file']['hash']))
-            if not data['disallow']:
-                added.add(data['rid'])
-            prog.update(task, advance=1)
-
-        dependencies = {}
-        for rid in added:
-            proj = cache[rid]
-            if not proj.get('used', False):
-               continue
-            if proj['options'].get('ignore_dep'):
-                continue
-            for drid, dval in proj['dependencies'].items():
-                dependencies[drid] = (dval, rid)
-        # dependencies = {drid:(dval, proj) for proj in cache.values() for drid, dval in proj['dependencies'].items() if proj.get('used', False)}
-        if len(dependencies) > 0:
-            cache, downloads_dep, error_dep = self.fetch_resources(dependencies, cache, prog, message="Fetching dependencies", check_update=check_update)
-            downloads += downloads_dep
-            error |= error_dep
+            await task_queue.put((rid, values))
+            queued.add(rid)
+        async with aiohttp.ClientSession() as session:
+            workers = [asyncio.create_task(_worker(session)) for _ in range(self.CONCURENCY)]
+            await asyncio.gather(*workers)
         return cache, downloads, error
 
     def setup_files(self, update=False, server=False):
@@ -697,7 +701,7 @@ class MainLauncher:
                         v.options.get('client_side', True) and
                         self.platform_check(v.options.get('skip_platform'), False)
                 }
-            self.cached, downloads, error = self.fetch_resources(resources, {}, prog, check_update=update)
+            self.cached, downloads, error = asyncio.run(self.fetch_resources_async(resources, {}, prog, check_update=update))
         save_json_xz(modlist_file, {'_mod_dict': self.cached, '_mapping': self.mapping})
         if error:
             raise Exception("Stopping because of previous errors")
