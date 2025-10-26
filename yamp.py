@@ -539,11 +539,12 @@ class MainLauncher:
             res2 = await session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT)
             res2_data = await res2.json()
             raise ValueError(f"No versions available for {res2_data['title']} {modid} https://modrinth.com/mod/{res2_data['slug']}, available: {', '.join(res2_data['game_versions'])} for [cyan]{'[/cyan], [cyan]'.join(res2_data['loaders'])}[/cyan]")
-        response = res_data[0]
         if version_id is not None:
-            response = next(filter(lambda x: x['id'] == version_id, response))
+            response = next(filter(lambda x: x['id'] == version_id, res_data))
         elif version_number is not None:
-            response = next(filter(lambda x: x['version_number'] == version_number, response))
+            response = next(filter(lambda x: x['version_number'] == version_number, res_data))
+        else:
+            response = res_data[0]
         data = {'response': response, 'source': 'modrinth', 'type': typ, 'last_checked': time.time()}
         data['rid'] = f"modrinth-{data['response']['project_id']}"
         if len(data['response']['files']) == 1:
