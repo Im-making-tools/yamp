@@ -1069,6 +1069,8 @@ class MainLauncher:
                 os.environ.setdefault('__NV_PRIME_RENDER_OFFLOAD', '1')
                 os.environ.setdefault('__VK_LAYER_NV_optimus', 'NVIDIA_only')
                 os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
+        if os.name == 'nt' and not no_prime:
+            os.environ.setdefault('SHIM_MCCOMPAT', '0x800000001')
         self.inst.launch(account)
 
 
