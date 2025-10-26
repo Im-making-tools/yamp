@@ -1015,7 +1015,9 @@ class MainLauncher:
             old_file.unlink(missing_ok=True)
         self.update_custom_files(server_dir)
         srv_args = [self.inst.get_java()]
-        if 'java_max_memory' in self.config['minecraft']:
+        if 'java_max_memory_server' in self.config['minecraft']:
+            srv_args += [f"-Xmx{self.config['minecraft']['java_max_memory_server']}"]
+        elif 'java_max_memory' in self.config['minecraft']:
             srv_args += [f"-Xmx{self.config['minecraft']['java_max_memory']}"]
         if self.LOADER == 'forge':
             lib_file = 'win_args.txt' if os.name == 'nt' else 'unix_args.txt'
