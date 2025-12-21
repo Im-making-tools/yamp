@@ -938,7 +938,10 @@ class MainLauncher:
                     # TODO: add jsonc, cfg
                     raise ValueError(f"Unsupported file extension: {filename}")
                 if filepath.exists():
-                    exising_data = loader(filepath.read_text())
+                    try:
+                        exising_data = loader(filepath.read_text())
+                    except json.decoder.JSONDecodeError as e:
+                        raise ValueError(f"Malformed json file [yellow]{filename}[/yellow], {e.args[0]}")
                     if isinstance(exising_data, dict):
                         exising_data.update(options['update'])
                     else:
