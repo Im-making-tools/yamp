@@ -692,7 +692,7 @@ class MainLauncher:
                         self.log.error(
                             f"Fetching [gray50]{rid}[/gray50] returned server status {e.response.status_code}")
                         if e.response.status_code == 429:  # server busy, lets put to end of the queue and try again
-                            task_queue.add((rid, values))
+                            await task_queue.put((rid, values))
                         else:
                             error = True
                     except ValueError as e:
