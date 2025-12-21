@@ -414,17 +414,18 @@ class MainLauncher:
 
     def get_instance(self, java) -> Instance:
         im = self.launcher.instance_manager
+        force_java_num = java is not None and java.isdigit()
         if not im.exists(self.PACK_NAME):
             inst = im.create(self.PACK_NAME, self.VERSION)
         else:
             inst = im.get(self.PACK_NAME)
         if 'java_max_memory' in self.config['minecraft']:
             inst.config['java.memory.max'] = self.config['minecraft']['java_max_memory']
-        if java:
+        if java and not force_java_num:
             inst.config['java.path'] = str(java)
-        elif 'java.path' not in inst.config or not Path(inst.config['java.path']).exists():
+        if force_java_num or 'java.path' not in inst.config or not Path(inst.config['java.path']).exists():
             version = self.launcher.version_manager.get_version(self.MC_VERSION)
-            java_ver = version.java_version.get('majorVersion', 8)
+            java_ver = int(java) if force_java_num else version.java_version.get('majorVersion', 8)
             local_java_path = self.JAVA_DIR / f'openjdk_{java_ver}'
             java_vers = {v.ver: v for v in installed_java_versions(local_java_path)}
             if java_ver not in java_vers:
