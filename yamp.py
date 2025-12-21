@@ -35,6 +35,7 @@ from rich.table import Table
 from rich.text import Text
 import rich.progress as progress
 import rich.markup
+import rich.box
 import shlex
 
 import xxhash
@@ -306,7 +307,7 @@ class MainLauncher:
             self.RESOURCES[f'{source}-{modid}'] = Resource(modid, source, typ, options)
 
 
-    def __init__(self, es, config_file: str, root_dir: str|None = None, java: str|None = JAVA, debug=False):
+    def __init__(self, es, config_file: str, config_ver_file: str|None=None, root_dir: str|None = None, java: str|None = JAVA, debug=False):
         self.session = requests.Session()
         self.debug = debug
         if not root_dir:
@@ -317,13 +318,47 @@ class MainLauncher:
         self.MINECRAFT_DIR = Path(root_dir).expanduser()
         self.DOWNLOAD_DIR = self.MINECRAFT_DIR / 'downloads'
         self.JAVA_DIR = self.MINECRAFT_DIR / 'java'
+        self.PLATFORM: set[str] = {platform.system().lower(), platform.machine()}
+        self.log.info('Platform: [bright_blue]' + '[/bright_blue], [bright_blue]'.join(sorted(self.PLATFORM)))
 
+        config_ver_raw = None
+        self.CONFIG_VER_FILE = None
         if config_file.startswith('http'):
             res = self.session.get(config_file)
             res.raise_for_status()
             config_data = res.text
+            if config_ver_file is None:
+                config_ver_url = urlparse(config_file)
+                new_url_path = config_ver_url.path.rsplit('.', maxsplit=1)[0] + '_ver.json'
+                config_ver_file = config_ver_url._replace(path=new_url_path).geturl()
         else:
             config_data = Path(config_file).read_text()
+            if config_ver_file is None:
+                config_ver_file = Path(config_file).with_suffix('_ver.json')
+
+        if config_ver_file.startswith('http'):
+            res = self.session.get(config_ver_file)
+            if res.status_code < 400:
+                config_ver_raw = res.text
+            else:
+                self.log.error(f'Failed to retrieve modpack version (response [red]{res.status_code}[/red]) from [yellow]{config_ver_file}')
+        else:
+            self.CONFIG_VER_FILE = Path(config_ver_file)
+            if self.CONFIG_VER_FILE.exists():
+                config_ver_raw = self.CONFIG_VER_FILE.read_text()
+
+        if config_ver_raw is not None:
+            try:
+                self.config_ver_data = json.loads(config_ver_raw)
+                if not isinstance(self.config_ver_data, dict):
+                    raise ValueError('json root object is not a dictionary')
+            except (json.decoder.JSONDecodeError, ValueError) as e:
+                self.log.error(f"Invalid modpack version json file [yellow]{config_ver_file or self.CONFIG_VER_FILE}[/yellow]: [gray50]{e.args[0]}")
+                self.config_ver_data = {}
+        else:
+            self.log.warning('No modpack version file')
+            self.config_ver_data = {}
+
         config = tomllib.loads(config_data)
         self.PLATFORM: set[str] = {platform.system().lower(), platform.machine()}
         self.log.info('Platform: [bright_blue]' + '[/bright_blue], [bright_blue]'.join(sorted(self.PLATFORM)))
@@ -475,10 +510,12 @@ class MainLauncher:
                     'hash': res.headers.get('etag', '').strip('"') or xxhash.xxh32_hexdigest(url)
             }
             data['name'] = f"{modid} ({url_parts.hostname})"
+            data['version_id'] = ''
+            data['version_name'] = ''
         return data
 
 
-    async def _fetch_curseforge_resource(self, modid, typ, session, any_version=False, **options):
+    async def _fetch_curseforge_resource(self, modid, typ, session, any_version=False, version_id=None, version_name=None, **options):
         params = {}
         if not any_version:
             params['version'] = self.MC_VERSION
@@ -498,7 +535,12 @@ class MainLauncher:
                 versions = set(v for f in data['response']['files'] for v in f['versions'])
                 raise ValueError(f"No versions available for {find(data, 'response.title', '<no title>')} "
                                  f"{modid} ({find(data, 'response.url.curseforge', '<no url>')}, files: {len(data['response']['files'])} versions: {versions}")
-            file = files[0]
+            if version_id is not None:
+                file = next(filter(lambda x: x['id'] == version_id, files))
+            elif version_name is not None:
+                file = next(filter(lambda x: x['name'] == version_name, files))
+            else:
+                file = files[0]
         sid = str(file['id'])
         data['latest_file'] = {
             'filename': file['name'],
@@ -509,6 +551,8 @@ class MainLauncher:
         data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
         data['name'] = f"{data['response']['title']} ({file['display']})"
         data['rid'] = f"curseforge-{data['response']['id']}"
+        data['version_id'] = file['id']
+        data['version_name'] = file['name']
         data['dependencies'] = {}
         return data
 
@@ -531,10 +575,13 @@ class MainLauncher:
         self.db[mod_id] = value
         return value
 
-    def save_mod_info(self):
+    def save_mod_info(self, save_ver=None):
         save_json_xz(self.MINECRAFT_DIR / 'project_cache.xz', self.db)
+        if save_ver is not None:
+            version_lock = {m: d['version_id'] for m, d in self.cached.items() if 'version_id' in d}
+            Path(save_ver).write_text(json.dumps(version_lock))
 
-    async def _fetch_modrinth_resource(self, modid, typ, session, any_version=False, version_id=None, version_number=None, **options):
+    async def _fetch_modrinth_resource(self, modid, typ, session, any_version=False, version_id=None, version_name=None, **options):
         params = {}
         if not any_version:
             params['game_versions'] = json.dumps([self.MC_VERSION])
@@ -549,10 +596,11 @@ class MainLauncher:
             res2 = await session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT)
             res2_data = await res2.json()
             raise ValueError(f"No versions available for {res2_data['title']} {modid} https://modrinth.com/mod/{res2_data['slug']}, available: {', '.join(res2_data['game_versions'])} for [cyan]{'[/cyan], [cyan]'.join(res2_data['loaders'])}[/cyan]")
+        response = res_data[0]
         if version_id is not None:
-            response = next(filter(lambda x: x['id'] == version_id, res_data))
-        elif version_number is not None:
-            response = next(filter(lambda x: x['version_number'] == version_number, res_data))
+            response = next(filter(lambda x: x['id'] == version_id, response))
+        elif version_name is not None:
+            response = next(filter(lambda x: x['version_number'] == version_name, response))
         else:
             response = res_data[0]
         data = {'response': response, 'source': 'modrinth', 'type': typ, 'last_checked': time.time()}
@@ -562,6 +610,8 @@ class MainLauncher:
         else:
             data['latest_file'] = next(filter(lambda x: x['primary'], data['response']['files']))
         data['name'] = data['response']['name']
+        data['version_id'] = data['response']['id']
+        data['version_name'] = data['response']['version_number']
         data['latest_file']['hash'] = data['latest_file']['hashes']['sha512'][:64]
 
         data['dependencies'] = {
@@ -595,6 +645,11 @@ class MainLauncher:
                 resolved_rid = self.mapping.get(rid, rid)
                 data = cache.get(resolved_rid, self.cached.get(resolved_rid, {}))
                 version_match = True
+                if modid in self.config_ver_data:
+                    # Soooo, priority is on modpack toml, then version file.
+                    # This is intentional to allow manual fixes by updating toml without regenerating version json.
+                    if isinstance(self.config_ver_data[modid], dict) and 'ver' in self.config_ver_data[modid]:
+                        opt.setdefault('version_id', self.config_ver_data[modid]['ver'])
 
                 # Just check if version/loader still match what's in cache (in case mc version is changed in .toml)
                 if 'response' in data and 'source' in data:
@@ -622,6 +677,13 @@ class MainLauncher:
                                 'size': files[0]['filesize'],
                             }
                             data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
+                    if 'version_id' not in data:
+                        if data['source'] == 'modrinth':
+                            data['version_id'] = data['response']['id']
+                            data['version_name'] = data['response']['version_number']
+                        elif data['source'] == 'curseforge':
+                            data['version_id'] = data['response']['download']['id']
+                            data['version_name'] = data['response']['download']['name']
                 if 'type' not in data or check_update or not version_match:
                     try:
                         data = await self.SOURCE_MAP[source](modid, typ, session, **opt)
@@ -632,7 +694,7 @@ class MainLauncher:
                         self.log.error(
                             f"Fetching [gray50]{rid}[/gray50] returned server status {e.response.status_code}")
                         if e.response.status_code == 429:  # server busy, lets put to end of the queue and try again
-                            task_queue.add((rid, values))
+                            await task_queue.put((rid, values))
                         else:
                             error = True
                     except ValueError as e:
@@ -772,7 +834,7 @@ class MainLauncher:
                 dependents[d[0]].append(t)
                 prog.update(task, advance=1)
 
-        table = Table()
+        table = Table(box=rich.box.SQUARE_DOUBLE_HEAD)
         table.add_column("File name", style="yellow")
         table.add_column("Name")
         table.add_column("Updated")
@@ -780,11 +842,20 @@ class MainLauncher:
         table.add_column("Server")
         table.add_column("Required by")
         table.add_column("RID")
+        table.add_column("Version")
+
+        # Add extra space for emojis as rich has a bug for table formatting
+        # https://stackoverflow.com/questions/33404752/
+        emoji_pattern = re.compile(u"([\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+                                   u"\U0001F1E0-\U0001F1FF\U00002500-\U00002BEF\U00002702-\U000027B0"
+                                   u"\U000024C2-\U0001F251\U0001f926-\U0001f937\U00010000-\U0010ffff"
+                                   u"\u2640-\u2642\u2600-\u2B55\u200d\u23cf\u23e9\u231a\ufe0f\u3030])", re.UNICODE)
+        fix_emoji = lambda s:  emoji_pattern.sub(r'', s)  # remove?  \g<1>
 
         unknown = Text('?', style="bold red")
         for mod_file in mod_files:
             if mod_file not in existing:
-                table.add_row(mod_file, unknown, unknown, unknown, unknown, unknown, unknown)
+                table.add_row(mod_file, unknown, unknown, unknown, unknown, unknown, unknown, unknown)
                 continue
             mod = existing[mod_file]
             qr = self.find_mod_info(mod['rid'])
@@ -796,10 +867,26 @@ class MainLauncher:
             client_side = qr.get('client_side', Text('yes?', style="bright_yellow"))
             if 'client_side' in mod['options']:
                 client_side = Text('enabled' if mod['options']['client_side'] else 'disabled', style="bright_yellow")
+            if server_side == 'unsupported':
+                server_side = Text('no', style="gray50")
+            if client_side == 'unsupported':
+                client_side = Text('no', style="gray50")
             proj_id = mod.get('response', {}).get('project_id', '')
             dep = '\n'.join(dependents.get(proj_id, []))
-            table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'])
+            ver_name = mod.get('version_name', unknown)
+            if 'version_id' in mod:
+                ver_name += f' [gray50]{mod["version_id"]}'
+            table.add_row(mod_file, fix_emoji(mod_name), updated, client_side, server_side, fix_emoji(dep), mod['rid'], ver_name)
         console.print(table)
+        table = Table(show_header=False, show_edge=True, box=rich.box.ROUNDED)
+        table.add_column("Option", style="bright_blue")
+        table.add_column("Value")
+        table.add_row('Minecraft', self.MC_VERSION)
+        table.add_row('Loader', self.VERSION)
+        table.add_row('Java', self.inst.config['java.path'])
+        table.add_row('Directory', str(self.inst.directory))
+        console.print(table)
+
 
     def check_zip_files(self):
         zip_files = list((self.inst.directory / 'minecraft' / 'mods').glob('*.jar'))
@@ -851,8 +938,19 @@ class MainLauncher:
                 self.log.info(f"Deleting: [yellow]{zip_file}[/yellow]")
                 zip_file.unlink()
 
-    def write_pack_info(self):
-        existing = {m['latest_file']: m for m in self.cached.values()}
+    def write_pack_info(self, force=False):
+        if self.CONFIG_VER_FILE is None:
+            self.log.error("Modpack version file is not specified!")
+            return
+        if self.CONFIG_VER_FILE.exists() and not force:
+            return
+        info = {}
+        for mod in self.cached.values():
+            proj_id = mod.get('response', {}).get('project_id', '')
+            ver_name = mod.get('version_name', None)
+            info[mod['rid']] = {'ver': mod["version_id"], 'project': proj_id, 'ver_name': ver_name}
+        self.log.info(f"Writing modpack version file [yellow]{self.CONFIG_VER_FILE}")
+        self.CONFIG_VER_FILE.write_text(json.dumps(info, indent=4))
 
     def update_custom_files(self, root=None):
         for filename, options in self.config.get('custom', {}).items():
@@ -892,7 +990,10 @@ class MainLauncher:
                     # TODO: add jsonc, cfg
                     raise ValueError(f"Unsupported file extension: {filename}")
                 if filepath.exists():
-                    exising_data = loader(filepath.read_text())
+                    try:
+                        exising_data = loader(filepath.read_text())
+                    except json.decoder.JSONDecodeError as e:
+                        raise ValueError(f"Malformed json file [yellow]{filename}[/yellow], {e.args[0]}")
                     if isinstance(exising_data, dict):
                         exising_data.update(options['update'])
                     else:
@@ -1074,14 +1175,15 @@ class MainLauncher:
             'quickPlayMultiplayer': multiplayer or '',
         }
         account = self.get_account(account_name)
-        if os.name == 'posix' and not no_prime:
-            output = subprocess.getoutput(['lspci', '-nn'])
-            if "nvidia" in output.lower():
+        if not no_prime:
+            if os.name == 'posix':
+                os.environ.setdefault('DRI_PRIME', '1')
+                # This may cause issue? Idea is either nvidia driver exists and this will work fine, or be ignored.
                 os.environ.setdefault('__NV_PRIME_RENDER_OFFLOAD', '1')
                 os.environ.setdefault('__VK_LAYER_NV_optimus', 'NVIDIA_only')
                 os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
-        if os.name == 'nt' and not no_prime:
-            os.environ.setdefault('SHIM_MCCOMPAT', '0x800000001')
+            elif os.name == 'nt':
+                os.environ.setdefault('SHIM_MCCOMPAT', '0x800000001')
         self.inst.launch(account)
 
 
@@ -1091,6 +1193,7 @@ def main():
     parser = argparse.ArgumentParser(
         prog='YAMP', description='Yet Another Minecraft Packmaker. Download and run Minecraft modpacks')
     parser.add_argument('-u', '--update', action='store_true', help='Check for updates and download latest')
+    parser.add_argument('-B', '--verfile', default=None, help='Specify path or URL for modpack version file')
     parser.add_argument('-a', '--account', default=None, help='Minecraft username to use')
     parser.add_argument('-D', '--debug', action='store_true', help='Enable debug environment')
     parser.add_argument('--no-prime', action='store_true', help='Disable prime rendering (linux with nvidia only, when disabled run on integrated gpu)')
@@ -1099,7 +1202,7 @@ def main():
     parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
     parser.add_argument('--multiplayer', default=None, help='Open multiplayer server')
     parser.add_argument('--timeout', default=30, type=int, help='Network connection timeout for downloading resources')
-    parser.add_argument('pack_file', help='Modpack toml filename or url')
+    parser.add_argument('pack_file', help='Modpack toml path or url')
     parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
     args = parser.parse_args()
@@ -1123,12 +1226,13 @@ def main():
     import mock
     with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue), ExitStack() as es:
         MainLauncher.TIMEOUT = args.timeout
-        ml = MainLauncher(es, args.pack_file, java=args.java, debug=args.debug)
+        ml = MainLauncher(es, args.pack_file, config_ver_file=args.verfile, java=args.java, debug=args.debug)
         ml.log.setLevel(logging.INFO)
         if args.action == 'loader_vers':
             ml.list_loader_versions()
             exit()
         ml.setup_files(args.update, server=args.action == 'server')
+        ml.write_pack_info(force=args.update)
         if args.action == 'check_zip':
             ml.check_zip_files()
             exit()
