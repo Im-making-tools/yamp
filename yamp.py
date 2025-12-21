@@ -35,6 +35,7 @@ from rich.table import Table
 from rich.text import Text
 import rich.progress as progress
 import rich.markup
+import rich.box
 import shlex
 
 import xxhash
@@ -792,7 +793,7 @@ class MainLauncher:
                 dependents[d[0]].append(t)
                 prog.update(task, advance=1)
 
-        table = Table()
+        table = Table(box=rich.box.SQUARE_DOUBLE_HEAD)
         table.add_column("File name", style="yellow")
         table.add_column("Name")
         table.add_column("Updated")
@@ -801,6 +802,14 @@ class MainLauncher:
         table.add_column("Required by")
         table.add_column("RID")
         table.add_column("Version")
+
+        # Add extra space for emojis as rich has a bug for table formatting
+        # https://stackoverflow.com/questions/33404752/
+        emoji_pattern = re.compile(u"([\U0001F600-\U0001F64F\U0001F300-\U0001F5FF\U0001F680-\U0001F6FF"
+                                   u"\U0001F1E0-\U0001F1FF\U00002500-\U00002BEF\U00002702-\U000027B0"
+                                   u"\U000024C2-\U0001F251\U0001f926-\U0001f937\U00010000-\U0010ffff"
+                                   u"\u2640-\u2642\u2600-\u2B55\u200d\u23cf\u23e9\u231a\ufe0f\u3030])", re.UNICODE)
+        fix_emoji = lambda s:  emoji_pattern.sub(r'', s)  # remove?  \g<1>
 
         unknown = Text('?', style="bold red")
         for mod_file in mod_files:
@@ -817,13 +826,26 @@ class MainLauncher:
             client_side = qr.get('client_side', Text('yes?', style="bright_yellow"))
             if 'client_side' in mod['options']:
                 client_side = Text('enabled' if mod['options']['client_side'] else 'disabled', style="bright_yellow")
+            if server_side == 'unsupported':
+                server_side = Text('no', style="gray50")
+            if client_side == 'unsupported':
+                client_side = Text('no', style="gray50")
             proj_id = mod.get('response', {}).get('project_id', '')
             dep = '\n'.join(dependents.get(proj_id, []))
             ver_name = mod.get('version_name', unknown)
             if 'version_id' in mod:
                 ver_name += f' [gray50]{mod["version_id"]}'
-            table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'], ver_name)
+            table.add_row(mod_file, fix_emoji(mod_name), updated, client_side, server_side, fix_emoji(dep), mod['rid'], ver_name)
         console.print(table)
+        table = Table(show_header=False, show_edge=True, box=rich.box.ROUNDED)
+        table.add_column("Option", style="bright_blue")
+        table.add_column("Value")
+        table.add_row('Minecraft', self.MC_VERSION)
+        table.add_row('Loader', self.VERSION)
+        table.add_row('Java', self.inst.config['java.path'])
+        table.add_row('Directory', str(self.inst.directory))
+        console.print(table)
+
 
     def check_zip_files(self):
         zip_files = list((self.inst.directory / 'minecraft' / 'mods').glob('*.jar'))
