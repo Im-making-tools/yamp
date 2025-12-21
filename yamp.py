@@ -307,7 +307,7 @@ class MainLauncher:
             self.RESOURCES[f'{source}-{modid}'] = Resource(modid, source, typ, options)
 
 
-    def __init__(self, es, config_file: str, root_dir: str|None = None, java: str|None = JAVA, debug=False):
+    def __init__(self, es, config_file: str, config_ver_file: str|None=None, root_dir: str|None = None, java: str|None = JAVA, debug=False):
         self.session = requests.Session()
         self.debug = debug
         if not root_dir:
@@ -318,13 +318,47 @@ class MainLauncher:
         self.MINECRAFT_DIR = Path(root_dir).expanduser()
         self.DOWNLOAD_DIR = self.MINECRAFT_DIR / 'downloads'
         self.JAVA_DIR = self.MINECRAFT_DIR / 'java'
+        self.PLATFORM: set[str] = {platform.system().lower(), platform.machine()}
+        self.log.info('Platform: [bright_blue]' + '[/bright_blue], [bright_blue]'.join(sorted(self.PLATFORM)))
 
+        config_ver_raw = None
+        self.CONFIG_VER_FILE = None
         if config_file.startswith('http'):
             res = self.session.get(config_file)
             res.raise_for_status()
             config_data = res.text
+            if config_ver_file is None:
+                config_ver_url = urlparse(config_file)
+                new_url_path = config_ver_url.path.rsplit('.', maxsplit=1)[0] + '_ver.json'
+                config_ver_file = config_ver_url._replace(path=new_url_path).geturl()
         else:
             config_data = Path(config_file).read_text()
+            if config_ver_file is None:
+                config_ver_file = Path(config_file).with_suffix('_ver.json')
+
+        if config_ver_file.startswith('http'):
+            res = self.session.get(config_ver_file)
+            if res.status_code < 400:
+                config_ver_raw = res.text
+            else:
+                self.log.error(f'Failed to retrieve modpack version (response [red]{res.status_code}[/red]) from [yellow]{config_ver_file}')
+        else:
+            self.CONFIG_VER_FILE = Path(config_ver_file)
+            if self.CONFIG_VER_FILE.exists():
+                config_ver_raw = self.CONFIG_VER_FILE.read_text()
+
+        if config_ver_raw is not None:
+            try:
+                self.config_ver_data = json.loads(config_ver_raw)
+                if not isinstance(self.config_ver_data, dict):
+                    raise ValueError('json root object is not a dictionary')
+            except (json.decoder.JSONDecodeError, ValueError) as e:
+                self.log.error(f"Invalid modpack version json file [yellow]{config_ver_file or self.CONFIG_VER_FILE}[/yellow]: [gray50]{e.args[0]}")
+                self.config_ver_data = {}
+        else:
+            self.log.warning('No modpack version file')
+            self.config_ver_data = {}
+
         config = tomllib.loads(config_data)
         self.PLATFORM: set[str] = {platform.system().lower(), platform.machine()}
         self.log.info('Platform: [bright_blue]' + '[/bright_blue], [bright_blue]'.join(sorted(self.PLATFORM)))
@@ -609,6 +643,11 @@ class MainLauncher:
                 resolved_rid = self.mapping.get(rid, rid)
                 data = cache.get(resolved_rid, self.cached.get(resolved_rid, {}))
                 version_match = True
+                if modid in self.config_ver_data:
+                    # Soooo, priority is on modpack toml, then version file.
+                    # This is intentional to allow manual fixes by updating toml without regenerating version json.
+                    if isinstance(self.config_ver_data[modid], dict) and 'ver' in self.config_ver_data[modid]:
+                        opt.setdefault('version_id', self.config_ver_data[modid]['ver'])
 
                 # Just check if version/loader still match what's in cache (in case mc version is changed in .toml)
                 if 'response' in data and 'source' in data:
@@ -897,8 +936,19 @@ class MainLauncher:
                 self.log.info(f"Deleting: [yellow]{zip_file}[/yellow]")
                 zip_file.unlink()
 
-    def write_pack_info(self):
-        existing = {m['latest_file']: m for m in self.cached.values()}
+    def write_pack_info(self, force=False):
+        if self.CONFIG_VER_FILE is None:
+            self.log.error("Modpack version file is not specified!")
+            return
+        if self.CONFIG_VER_FILE.exists() and not force:
+            return
+        info = {}
+        for mod in self.cached.values():
+            proj_id = mod.get('response', {}).get('project_id', '')
+            ver_name = mod.get('version_name', None)
+            info[mod['rid']] = {'ver': mod["version_id"], 'project': proj_id, 'ver_name': ver_name}
+        self.log.info(f"Writing modpack version file [yellow]{self.CONFIG_VER_FILE}")
+        self.CONFIG_VER_FILE.write_text(json.dumps(info, indent=4))
 
     def update_custom_files(self, root=None):
         for filename, options in self.config.get('custom', {}).items():
@@ -1141,6 +1191,7 @@ def main():
     parser = argparse.ArgumentParser(
         prog='YAMP', description='Yet Another Minecraft Packmaker. Download and run Minecraft modpacks')
     parser.add_argument('-u', '--update', action='store_true', help='Check for updates and download latest')
+    parser.add_argument('-B', '--verfile', default=None, help='Specify path or URL for modpack version file')
     parser.add_argument('-a', '--account', default=None, help='Minecraft username to use')
     parser.add_argument('-D', '--debug', action='store_true', help='Enable debug environment')
     parser.add_argument('--no-prime', action='store_true', help='Disable prime rendering (linux with nvidia only, when disabled run on integrated gpu)')
@@ -1149,7 +1200,7 @@ def main():
     parser.add_argument('--singleplayer', default=None, help='Open singleplayer world')
     parser.add_argument('--multiplayer', default=None, help='Open multiplayer server')
     parser.add_argument('--timeout', default=30, type=int, help='Network connection timeout for downloading resources')
-    parser.add_argument('pack_file', help='Modpack toml filename or url')
+    parser.add_argument('pack_file', help='Modpack toml path or url')
     parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
     args = parser.parse_args()
@@ -1173,12 +1224,13 @@ def main():
     import mock
     with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue), ExitStack() as es:
         MainLauncher.TIMEOUT = args.timeout
-        ml = MainLauncher(es, args.pack_file, java=args.java, debug=args.debug)
+        ml = MainLauncher(es, args.pack_file, config_ver_file=args.verfile, java=args.java, debug=args.debug)
         ml.log.setLevel(logging.INFO)
         if args.action == 'loader_vers':
             ml.list_loader_versions()
             exit()
         ml.setup_files(args.update, server=args.action == 'server')
+        ml.write_pack_info(force=args.update)
         if args.action == 'check_zip':
             ml.check_zip_files()
             exit()
