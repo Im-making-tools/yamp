@@ -336,7 +336,7 @@ class MainLauncher:
             if config_ver_file is None:
                 config_ver_file = Path(config_file).with_suffix('.json')
 
-        if config_ver_file.startswith('http'):
+        if str(config_ver_file).startswith('http'):
             res = self.session.get(config_ver_file)
             if res.status_code < 400:
                 config_ver_raw = res.text
