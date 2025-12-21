@@ -248,9 +248,9 @@ def load_json_xz(filepath: Path, default_factor=dict):
             if uncompressed_file.exists():
                 return json.loads(uncompressed_file.read_bytes())
     except EOFError as e:
-        MainLauncher.log.error(f"Failed to load {filepath} ignoring file. [gray50]{e.args[0]}")
+        MainLauncher.log.error(f"Failed to load [yellow]{filepath}[/yellow] ignoring file. [gray50]{e.args[0]}")
     except json.decoder.JSONDecodeError:
-        MainLauncher.log.error(f"Failed to decode JSON in {filepath} ignoring file")
+        MainLauncher.log.error(f"Failed to decode JSON in [yellow]{filepath}[/yellow] ignoring file")
     return default_factor()
 
 def json_encoder(obj):
