@@ -475,10 +475,12 @@ class MainLauncher:
                     'hash': res.headers.get('etag', '').strip('"') or xxhash.xxh32_hexdigest(url)
             }
             data['name'] = f"{modid} ({url_parts.hostname})"
+            data['version_id'] = ''
+            data['version_name'] = ''
         return data
 
 
-    async def _fetch_curseforge_resource(self, modid, typ, session, any_version=False, **options):
+    async def _fetch_curseforge_resource(self, modid, typ, session, any_version=False, version_id=None, version_name=None, **options):
         params = {}
         if not any_version:
             params['version'] = self.MC_VERSION
@@ -498,7 +500,12 @@ class MainLauncher:
                 versions = set(v for f in data['response']['files'] for v in f['versions'])
                 raise ValueError(f"No versions available for {find(data, 'response.title', '<no title>')} "
                                  f"{modid} ({find(data, 'response.url.curseforge', '<no url>')}, files: {len(data['response']['files'])} versions: {versions}")
-            file = files[0]
+            if version_id is not None:
+                file = next(filter(lambda x: x['id'] == version_id, files))
+            elif version_name is not None:
+                file = next(filter(lambda x: x['name'] == version_name, files))
+            else:
+                file = files[0]
         sid = str(file['id'])
         data['latest_file'] = {
             'filename': file['name'],
@@ -509,6 +516,8 @@ class MainLauncher:
         data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
         data['name'] = f"{data['response']['title']} ({file['display']})"
         data['rid'] = f"curseforge-{data['response']['id']}"
+        data['version_id'] = file['id']
+        data['version_name'] = file['name']
         data['dependencies'] = {}
         return data
 
@@ -531,10 +540,13 @@ class MainLauncher:
         self.db[mod_id] = value
         return value
 
-    def save_mod_info(self):
+    def save_mod_info(self, save_ver=None):
         save_json_xz(self.MINECRAFT_DIR / 'project_cache.xz', self.db)
+        if save_ver is not None:
+            version_lock = {m: d['version_id'] for m, d in self.cached.items() if 'version_id' in d}
+            Path(save_ver).write_text(json.dumps(version_lock))
 
-    async def _fetch_modrinth_resource(self, modid, typ, session, any_version=False, version_id=None, version_number=None, **options):
+    async def _fetch_modrinth_resource(self, modid, typ, session, any_version=False, version_id=None, version_name=None, **options):
         params = {}
         if not any_version:
             params['game_versions'] = json.dumps([self.MC_VERSION])
@@ -552,8 +564,8 @@ class MainLauncher:
         response = res_data[0]
         if version_id is not None:
             response = next(filter(lambda x: x['id'] == version_id, response))
-        elif version_number is not None:
-            response = next(filter(lambda x: x['version_number'] == version_number, response))
+        elif version_name is not None:
+            response = next(filter(lambda x: x['version_number'] == version_name, response))
         data = {'response': response, 'source': 'modrinth', 'type': typ, 'last_checked': time.time()}
         data['rid'] = f"modrinth-{data['response']['project_id']}"
         if len(data['response']['files']) == 1:
@@ -561,6 +573,8 @@ class MainLauncher:
         else:
             data['latest_file'] = next(filter(lambda x: x['primary'], data['response']['files']))
         data['name'] = data['response']['name']
+        data['version_id'] = data['response']['id']
+        data['version_name'] = data['response']['version_number']
         data['latest_file']['hash'] = data['latest_file']['hashes']['sha512'][:64]
 
         data['dependencies'] = {
@@ -621,6 +635,13 @@ class MainLauncher:
                                 'size': files[0]['filesize'],
                             }
                             data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
+                    if 'version_id' not in data:
+                        if data['source'] == 'modrinth':
+                            data['version_id'] = data['response']['id']
+                            data['version_name'] = data['response']['version_number']
+                        elif data['source'] == 'curseforge':
+                            data['version_id'] = data['response']['download']['id']
+                            data['version_name'] = data['response']['download']['name']
                 if 'type' not in data or check_update or not version_match:
                     try:
                         data = await self.SOURCE_MAP[source](modid, typ, session, **opt)
@@ -779,11 +800,12 @@ class MainLauncher:
         table.add_column("Server")
         table.add_column("Required by")
         table.add_column("RID")
+        table.add_column("Version")
 
         unknown = Text('?', style="bold red")
         for mod_file in mod_files:
             if mod_file not in existing:
-                table.add_row(mod_file, unknown, unknown, unknown, unknown, unknown, unknown)
+                table.add_row(mod_file, unknown, unknown, unknown, unknown, unknown, unknown, unknown)
                 continue
             mod = existing[mod_file]
             qr = self.find_mod_info(mod['rid'])
@@ -797,7 +819,10 @@ class MainLauncher:
                 client_side = Text('enabled' if mod['options']['client_side'] else 'disabled', style="bright_yellow")
             proj_id = mod.get('response', {}).get('project_id', '')
             dep = '\n'.join(dependents.get(proj_id, []))
-            table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'])
+            ver_name = mod.get('version_name', unknown)
+            if 'version_id' in mod:
+                ver_name += f' [gray50]{mod["version_id"]}'
+            table.add_row(mod_file, mod_name, updated, client_side, server_side, dep, mod['rid'], ver_name)
         console.print(table)
 
     def check_zip_files(self):
