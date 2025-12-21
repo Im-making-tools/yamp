@@ -34,6 +34,8 @@ from rich.console import Console
 from rich.table import Table
 from rich.text import Text
 import rich.progress as progress
+import rich.markup
+import shlex
 
 import xxhash
 import requests
@@ -55,22 +57,27 @@ JavaRuntime = namedtuple('JavaInstallation', ['ver', 'full_ver', 'runtime', 'bin
 
 def get_installation(binary) -> JavaRuntime:
     if not os.access(binary, os.X_OK):
-        raise ValueError(f"Binary {binary} is not executable")
-    full_ver_str = subprocess.getoutput(f'{binary} -version').split('\n')
+        raise ValueError(f"Binary [yellow]{binary}[/yellow] is not executable")
+    full_ver_str = subprocess.getoutput(shlex.quote(str(binary)) + ' -version').split('\n')
     if len(full_ver_str) < 3:
-        raise ValueError(f"Binary {binary} returned invalid version: {full_ver_str}")
+        raise ValueError(f"Binary [yellow]{binary}[/yellow] returned invalid version: {full_ver_str}")
     java_ver_str, _, server_ver_str = full_ver_str[-3:]
     try:
         java_ver_str_split = java_ver_str.split(' ')
         ver_str = java_ver_str_split[2].strip('"')
         ver_parts = ver_str.split('_')[0].split('.')
         major_ver = int(ver_parts[1] if ver_parts[0] == '1' else ver_parts[0])
-        runtime = 'openjdk'
-        if 'GraalVM' in server_ver_str:
+        runtime = 'jdk'
+        if 'openjdk' in server_ver_str.lower():
+            runtime = 'openjdk'
+        elif 'graalvm' in server_ver_str.lower():
             runtime = 'graalvm'
         return JavaRuntime(major_ver, ver_str, runtime, binary)
     except (ValueError, IndexError):
-        raise ValueError(f'Failed to parse java version: {java_ver_str} given by {binary}')
+        resp = rich.markup.escape("\n".join(full_ver_str[:5]))
+        if len(full_ver_str) > 5:
+            resp += f'\n[italic]... {len(full_ver_str)-5} more lines ...'
+        raise ValueError(f'Failed to parse java version [yellow]{binary}[/yellow], response:\n[gray50]{resp}')
 
 def installed_java_versions(search_path: str|Path = None, search_defaults=True) -> list[JavaRuntime]:
     java_path_candidates_unix = [
