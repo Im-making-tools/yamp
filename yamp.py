@@ -329,12 +329,12 @@ class MainLauncher:
             config_data = res.text
             if config_ver_file is None:
                 config_ver_url = urlparse(config_file)
-                new_url_path = config_ver_url.path.rsplit('.', maxsplit=1)[0] + '_ver.json'
+                new_url_path = config_ver_url.path.rsplit('.', maxsplit=1)[0] + '.json'
                 config_ver_file = config_ver_url._replace(path=new_url_path).geturl()
         else:
             config_data = Path(config_file).read_text()
             if config_ver_file is None:
-                config_ver_file = Path(config_file).with_suffix('_ver.json')
+                config_ver_file = Path(config_file).with_suffix('.json')
 
         if config_ver_file.startswith('http'):
             res = self.session.get(config_ver_file)
