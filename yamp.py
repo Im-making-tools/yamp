@@ -1123,14 +1123,15 @@ class MainLauncher:
             'quickPlayMultiplayer': multiplayer or '',
         }
         account = self.get_account(account_name)
-        if os.name == 'posix' and not no_prime:
-            output = subprocess.getoutput(['lspci', '-nn'])
-            if "nvidia" in output.lower():
+        if not no_prime:
+            if os.name == 'posix':
+                os.environ.setdefault('DRI_PRIME', '1')
+                # This may cause issue? Idea is either nvidia driver exists and this will work fine, or be ignored.
                 os.environ.setdefault('__NV_PRIME_RENDER_OFFLOAD', '1')
                 os.environ.setdefault('__VK_LAYER_NV_optimus', 'NVIDIA_only')
                 os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
-        if os.name == 'nt' and not no_prime:
-            os.environ.setdefault('SHIM_MCCOMPAT', '0x800000001')
+            elif os.name == 'nt':
+                os.environ.setdefault('SHIM_MCCOMPAT', '0x800000001')
         self.inst.launch(account)
 
 
