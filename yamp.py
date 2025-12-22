@@ -650,7 +650,7 @@ class MainLauncher:
                     if isinstance(ver_data, dict) and 'ver' in ver_data:
                         opt.setdefault('version_id', ver_data['ver'])
                 version_match = True
-                if 'version_id' in opt and data['version_id'] != opt['version_id']:
+                if 'version_id' in opt and data.get('version_id') != opt['version_id']:
                     version_match = False
 
                 # Just check if version/loader still match what's in cache (in case mc version is changed in .toml)
