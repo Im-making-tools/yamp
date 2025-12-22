@@ -596,13 +596,12 @@ class MainLauncher:
             res2 = await session.get(f'https://api.modrinth.com/v2/project/{modid}', params=params, timeout=self.TIMEOUT)
             res2_data = await res2.json()
             raise ValueError(f"No versions available for {res2_data['title']} {modid} https://modrinth.com/mod/{res2_data['slug']}, available: {', '.join(res2_data['game_versions'])} for [cyan]{'[/cyan], [cyan]'.join(res2_data['loaders'])}[/cyan]")
-        response = res_data[0]
         if version_id is not None:
-            response = next(filter(lambda x: x['id'] == version_id, response))
+            response = next(filter(lambda x: x['id'] == version_id, res_data))
         elif version_name is not None:
-            response = next(filter(lambda x: x['version_number'] == version_name, response))
+            response = next(filter(lambda x: x['version_number'] == version_name, res_data))
         else:
-            response = res_data[0]
+            response = res_data[0]  # just get latest
         data = {'response': response, 'source': 'modrinth', 'type': typ, 'last_checked': time.time()}
         data['rid'] = f"modrinth-{data['response']['project_id']}"
         if len(data['response']['files']) == 1:
@@ -644,15 +643,18 @@ class MainLauncher:
                     modid, source, typ, opt = values
                 resolved_rid = self.mapping.get(rid, rid)
                 data = cache.get(resolved_rid, self.cached.get(resolved_rid, {}))
-                version_match = True
-                if modid in self.config_ver_data:
+                if resolved_rid in self.config_ver_data:
                     # Soooo, priority is on modpack toml, then version file.
                     # This is intentional to allow manual fixes by updating toml without regenerating version json.
-                    if isinstance(self.config_ver_data[modid], dict) and 'ver' in self.config_ver_data[modid]:
-                        opt.setdefault('version_id', self.config_ver_data[modid]['ver'])
+                    ver_data = self.config_ver_data[resolved_rid]
+                    if isinstance(ver_data, dict) and 'ver' in ver_data:
+                        opt.setdefault('version_id', ver_data['ver'])
+                version_match = True
+                if 'version_id' in opt and data['version_id'] != opt['version_id']:
+                    version_match = False
 
                 # Just check if version/loader still match what's in cache (in case mc version is changed in .toml)
-                if 'response' in data and 'source' in data:
+                if version_match and 'response' in data and 'source' in data:
                     local_loader = opt.get('loader', self.LOADER)
                     if data['source'] == 'modrinth':
                         version_match &= opt.get('incompatible', False) or self.MC_VERSION in data['response'][
