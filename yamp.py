@@ -1189,6 +1189,12 @@ class MainLauncher:
                 os.environ.setdefault('__GLX_VENDOR_LIBRARY_NAME', 'nvidia')
             elif os.name == 'nt':
                 os.environ.setdefault('SHIM_MCCOMPAT', '0x800000001')
+        if os.name == 'posix':
+            # Fix openal with pipewire
+            alsoftrc = self.MINECRAFT_DIR / '.alsoftrc'
+            if not alsoftrc.exists():
+                alsoftrc.write_text('[general]\ndrivers=pulse\nhrtf=true')
+            os.environ['ALSOFT_CONF'] = str(alsoftrc.absolute())
         self.inst.launch(account)
 
 
