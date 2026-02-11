@@ -528,22 +528,28 @@ class MainLauncher:
         res.raise_for_status()
         res_data = await res.json()
         data = {'response': res_data, 'source': 'curseforge', 'type': typ, 'last_checked': time.time()}
+        file = None
         if 'download' in data['response']:
             file = data['response']['download']
-        else:
+            if version_id is not None and file['id'] != version_id:
+                file = None
+            elif version_name is not None and file['name'] != version_name:
+                file = None
+        if file is None:
             files = sorted(filter(lambda x: self.MC_VERSION in x['versions'] and params['loader'].capitalize() in x['versions'], data['response']['files']), key=lambda x: -x['id'])
             if len(files) == 0:  # try without loader
                 files = sorted(filter(lambda x: self.MC_VERSION in x['versions'], data['response']['files']), key=lambda x: -x['id'])
-            if len(files) == 0:
+            try:
+                if version_id is not None:
+                    file = next(filter(lambda x: x['id'] == version_id, files))
+                elif version_name is not None:
+                    file = next(filter(lambda x: x['name'] == version_name, files))
+                else:
+                    file = files[0]
+            except (StopIteration, IndexError):
                 versions = set(v for f in data['response']['files'] for v in f['versions'])
                 raise ValueError(f"No versions available for {find(data, 'response.title', '<no title>')} "
                                  f"{modid} ({find(data, 'response.url.curseforge', '<no url>')}, files: {len(data['response']['files'])} versions: {versions}")
-            if version_id is not None:
-                file = next(filter(lambda x: x['id'] == version_id, files))
-            elif version_name is not None:
-                file = next(filter(lambda x: x['name'] == version_name, files))
-            else:
-                file = files[0]
         sid = str(file['id'])
         data['latest_file'] = {
             'filename': file['name'],
@@ -653,6 +659,7 @@ class MainLauncher:
                     if isinstance(ver_data, dict) and 'ver' in ver_data:
                         opt.setdefault('version_id', ver_data['ver'])
                 version_match = True
+                old_name = data['name']
                 if 'version_id' in opt and data.get('version_id') != opt['version_id']:
                     version_match = False
 
@@ -692,10 +699,12 @@ class MainLauncher:
                 if 'type' not in data or check_update or not version_match:
                     try:
                         data = await self.SOURCE_MAP[source](modid, typ, session, **opt)
+                        if old_name != data['name']:
+                            self.log.info(f"Updating [blue]{old_name}[/blue] -> [green]{data['name']}")
                     except aiohttp.exceptions.ReadTimeout:
                         self.log.error(f"Fetching [gray50]{rid}[/gray50] timed out")
                         error = True
-                    except aiohttp.exceptions.HTTPError as e:
+                    except aiohttp.HTTPError as e:
                         self.log.error(
                             f"Fetching [gray50]{rid}[/gray50] returned server status {e.response.status_code}")
                         if e.response.status_code == 429:  # server busy, lets put to end of the queue and try again
@@ -945,7 +954,6 @@ class MainLauncher:
 
     def write_pack_info(self, force=False):
         if self.CONFIG_VER_FILE is None:
-            self.log.error("Modpack version file is not specified!")
             return
         if self.CONFIG_VER_FILE.exists() and not force:
             return
