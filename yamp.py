@@ -520,6 +520,8 @@ class MainLauncher:
 
     async def _fetch_curseforge_resource(self, modid, typ, session, any_version=False, version_id=None, version_name=None, **options):
         params = {}
+        if version_id is not None:
+            version_id = int(version_id)
         if not any_version:
             params['version'] = self.MC_VERSION
         if typ == "mods":
@@ -682,13 +684,22 @@ class MainLauncher:
                         if len(files) == 0:
                             version_match = False
                         else:
-                            sid = str(files[0]['id'])
-                            data['latest_file'] = {
-                                'filename': files[0]['name'],
-                                'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{files[0]['name']}',
-                                'size': files[0]['filesize'],
-                            }
-                            data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
+                            try:
+                                if opt.get('version_id') is not None:
+                                    file = next(filter(lambda x: x['id'] == opt.get('version_id'), files))
+                                elif opt.get('version_name') is not None:
+                                    file = next(filter(lambda x: x['name'] == opt.get('version_name'), files))
+                                else:
+                                    file = files[0]
+                                sid = str(file['id'])
+                                data['latest_file'] = {
+                                    'filename': file['name'],
+                                    'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{files[0]['name']}',
+                                    'size': file['filesize'],
+                                }
+                                data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
+                            except StopIteration:
+                                version_match = False
                     if 'version_id' not in data:
                         if data['source'] == 'modrinth':
                             data['version_id'] = data['response']['id']
