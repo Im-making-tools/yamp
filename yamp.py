@@ -659,7 +659,7 @@ class MainLauncher:
                     if isinstance(ver_data, dict) and 'ver' in ver_data:
                         opt.setdefault('version_id', ver_data['ver'])
                 version_match = True
-                old_name = data['name']
+                old_name = data.get('name')
                 if 'version_id' in opt and data.get('version_id') != opt['version_id']:
                     version_match = False
 
