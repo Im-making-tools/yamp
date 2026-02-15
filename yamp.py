@@ -694,7 +694,7 @@ class MainLauncher:
                                 sid = str(file['id'])
                                 data['latest_file'] = {
                                     'filename': file['name'],
-                                    'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{files[0]['name']}',
+                                    'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{file['name']}',
                                     'size': file['filesize'],
                                 }
                                 data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
