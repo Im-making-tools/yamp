@@ -715,6 +715,9 @@ class MainLauncher:
                             self.log.info(f"Updating [green]{data['name']}")
                         elif old_name != data['name']:
                             self.log.info(f"Updating [blue]{old_name}[/blue] -> [green]{data['name']}")
+                    except RuntimeError:  # Exception with the coroute
+                        self.log.error(f"Fetching [gray50]{rid}[/gray50] raised internal error. Opt={opt}")
+                        error = True
                     except asyncio.TimeoutError:
                         self.log.error(f"Fetching [gray50]{rid}[/gray50] timed out")
                         error = True
