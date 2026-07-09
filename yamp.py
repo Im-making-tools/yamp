@@ -41,6 +41,7 @@ import shlex
 import xxhash
 import requests
 import aiohttp
+import aiohttp.web_exceptions
 import aiofiles
 
 console = Console(highlighter=None)
@@ -717,7 +718,7 @@ class MainLauncher:
                     except asyncio.TimeoutError:
                         self.log.error(f"Fetching [gray50]{rid}[/gray50] timed out")
                         error = True
-                    except aiohttp.HTTPError as e:
+                    except aiohttp.web_exceptions.HTTPError as e:
                         self.log.error(
                             f"Fetching [gray50]{rid}[/gray50] returned server status {e.response.status_code}")
                         if e.response.status_code == 429:  # server busy, lets put to end of the queue and try again
