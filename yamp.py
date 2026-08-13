@@ -494,14 +494,14 @@ class MainLauncher:
 
         data = {
             'response': None, 'source': 'url', 'type': typ, 'dependencies': {},
-            'last_checked': time.time(), 'rid': f"url-{xxhash.xxh32_hexdigest(url)}",
+            'last_checked': time.time(), 'rid': f"url-{xxhash.xxh32_hexdigest(url.encode())}",
         }
         if url_parts.scheme == 'file':
             data['latest_file'] = {
                     'filename': modid,
                     'url': url,
                     'size': Path(url_parts.path).stat().st_size,
-                    'hash': xxhash.xxh32_hexdigest(url)
+                    'hash': xxhash.xxh32_hexdigest(url.encode())
             }
             data['name'] = f"{modid} (local file)"
         else:
@@ -511,7 +511,7 @@ class MainLauncher:
                     'filename': modid,
                     'url': url,
                     'size': int(res.headers['content-length']),
-                    'hash': res.headers.get('etag', '').strip('"') or xxhash.xxh32_hexdigest(url)
+                    'hash': res.headers.get('etag', '').strip('"') or xxhash.xxh32_hexdigest(url.encode())
             }
             data['name'] = f"{modid} ({url_parts.hostname})"
             data['version_id'] = ''
@@ -698,7 +698,7 @@ class MainLauncher:
                                     'url': f'https://mediafilez.forgecdn.net/files/{sid[:-3].lstrip('0')}/{sid[-3:].lstrip('0')}/{file['name']}',
                                     'size': file['filesize'],
                                 }
-                                data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'])
+                                data['latest_file']['hash'] = xxhash.xxh32_hexdigest(data['latest_file']['url'].encode())
                             except StopIteration:
                                 version_match = False
                     if 'version_id' not in data:
