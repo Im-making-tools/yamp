@@ -20,7 +20,7 @@ import subprocess
 import lzma
 from urllib.parse import urlparse
 from zipfile import ZipFile, BadZipFile
-
+import mock
 
 from picomc.version import VersionManager
 from picomc.launcher import Launcher
@@ -44,7 +44,7 @@ import aiohttp
 import aiohttp.web_exceptions
 import aiofiles
 
-console = Console(highlighter=None)
+console = Console(highlighter=None, file=sys.stderr)
 
 logging.basicConfig(
     level="INFO",
@@ -1193,7 +1193,7 @@ class MainLauncher:
             return acc
         return self.am.get_default()
 
-    def start_client(self, account_name=None, singleplayer=None, multiplayer=None, no_prime=False):
+    def start_client(self, account_name=None, singleplayer=None, multiplayer=None, no_prime=False, return_args=False):
         self.log.info(f"Launching modpack [yellow]{self.PACK_NAME}")
         self.log.info(f"Client directory: [yellow]{self.inst.directory / 'minecraft'}")
         self.inst.features = {
@@ -1220,7 +1220,18 @@ class MainLauncher:
             if not alsoftrc.exists():
                 alsoftrc.write_text('[general]\ndrivers=pulse\nhrtf=true')
             os.environ['ALSOFT_CONF'] = str(alsoftrc.absolute())
-        self.inst.launch(account)
+        if return_args:
+            subprocess_run = subprocess.run
+            def run(*args, **kwargs):
+                if args[0][-1] == 'SysDump':  # java check
+                    return subprocess_run(*args, **kwargs)
+                import shlex
+                env = ['DRI_PRIME', '__NV_PRIME_RENDER_OFFLOAD', '__VK_LAYER_NV_optimus', '__GLX_VENDOR_LIBRARY_NAME', 'SHIM_MCCOMPAT', 'ALSOFT_CONF']
+                print(' '.join([f'{e}={os.environ[e]}' for e in env if e in os.environ]) + ' ' + shlex.join(args[0]))
+            with mock.patch.object(subprocess, 'run', run):
+                self.inst.launch(account)
+        else:
+            self.inst.launch(account)
 
 
 def main():
@@ -1239,7 +1250,7 @@ def main():
     parser.add_argument('--multiplayer', default=None, help='Open multiplayer server')
     parser.add_argument('--timeout', default=30, type=int, help='Network connection timeout for downloading resources')
     parser.add_argument('pack_file', help='Modpack toml path or url')
-    parser.add_argument('action', choices=['client', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
+    parser.add_argument('action', choices=['client', 'client-args', 'java', 'check', 'server', 'loader_vers', 'check_zip'], help='Specify action to do')
 
     args = parser.parse_args()
     test_symlink()
@@ -1259,7 +1270,6 @@ def main():
        [italic gray50]Yet Another Minecraft Packmaker.
         """)
     import picomc.downloader
-    import mock
     with mock.patch.object(picomc.downloader, 'DownloadQueue', DownloadQueue), ExitStack() as es:
         MainLauncher.TIMEOUT = args.timeout
         ml = MainLauncher(es, args.pack_file, config_ver_file=args.verfile, java=args.java, debug=args.debug)
@@ -1284,7 +1294,8 @@ def main():
         ml.save_mod_info()
         if args.action == 'client':
             ml.start_client(args.account, args.singleplayer, args.multiplayer, args.no_prime)
-
+        if args.action == 'client-args':
+            ml.start_client(args.account, args.singleplayer, args.multiplayer, args.no_prime, return_args=True)
 
 if __name__ == "__main__":
     main()
